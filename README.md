@@ -5,7 +5,7 @@ Defaults are synthetic placeholders; swap in your trained propensity and severit
 
 Goal: Treat security like capital allocation. Each control has a cost and reduces expected loss (ΔEAL) and tail risk (ΔVaR). Rank, bundle, and justify spend in CFO-native terms.
 
-✨ Features
+Features
 
 Monte Carlo engine (frequency ~ Poisson(λ); heavy-tailed severity proxy)
 
@@ -29,7 +29,7 @@ Controls: Apply likelihood/severity multipliers (and optional annual cost)
 
 Outputs: EAL, VaR95/99, LEC, ROI tables, CSV export
 
-🧪 Inputs (left panel)
+Inputs (left panel)
 Field	What it means	Tips
 NAICS sector	Seeds starter priors (breach propensity, records per breach)	Replace with your sector priors / model hooks
 Simulation trials	Number of Monte Carlo runs	10k is good for demos; more = smoother tails
