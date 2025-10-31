@@ -1,78 +1,137 @@
 # engine.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Optional
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
-from typing import Dict, Tuple, Optional
 from scipy import stats
 
-# ---------- Severity: Spliced Lognormal (body) + GPD (tail) ----------
+__all__ = [
+    "SplicedParams",
+    "FreqParams",
+    "ModelConfig",
+    "ControlEffects",
+    "posterior_lambda",
+    "build_spliced_from_priors",
+    "sample_spliced",
+    "sample_frequency",
+    "simulate_annual_losses",
+    "compute_metrics",
+    "lec",
+    "lec_bands",
+]
+
+# ---------------------------------------------------------------------
+# Severity: Spliced Lognormal (body) + GPD (tail)
+# ---------------------------------------------------------------------
+
 @dataclass
 class SplicedParams:
-    thr_q: float = 0.95         # quantile threshold used to separate body/tail
-    thr: float = 0.0            # absolute threshold (computed)
-    mu: float = 10.0            # lognormal mu (on log scale)
-    sigma: float = 1.0          # lognormal sigma
-    gpd_c: float = 0.3          # GPD shape (xi)
-    gpd_scale: float = 2e5      # GPD scale (beta)
+    """Parameters for a simple spliced loss model."""
+    thr_q: float = 0.95       # quantile threshold that splits body vs tail
+    thr: float = 0.0          # absolute threshold (computed from thr_q)
+    mu: float = 10.0          # lognormal mu (log scale)
+    sigma: float = 1.0        # lognormal sigma
+    gpd_c: float = 0.3        # GPD shape (xi)
+    gpd_scale: float = 2e5    # GPD scale (beta)
 
-def _fit_spliced_from_losses(losses: np.ndarray, q: float=0.95) -> SplicedParams:
-    thr = np.quantile(losses, q)
+
+def _fit_spliced_from_losses(losses: np.ndarray, q: float = 0.95) -> SplicedParams:
+    """
+    Fit a spliced body/tail model from synthetic losses.
+    Body: Lognormal fit to values <= threshold.
+    Tail:  GPD fit (excesses over threshold).
+    """
+    losses = np.asarray(losses, dtype=float)
+    thr = float(np.quantile(losses, q))
+
     body = losses[losses <= thr]
     tail = losses[losses > thr] - thr
-    # guardrails
-    body = body[body > 0]
-    if len(body) < 20:  # fallback if insufficient data
+
+    # Guardrails for pathological samples
+    body = body[body > 0.0]
+    if body.size < 20:
         body = np.maximum(losses, 1.0)
 
-    # lognormal fit on body
+    # Lognormal on body (fit normal to logs)
     mu, sigma = stats.norm.fit(np.log(body))
-    # GPD fit on tail
-    if len(tail) < 10:
-        c, scale = 0.25, np.maximum(thr, 1.0) * 0.5
-    else:
-        c, loc, scale = stats.genpareto.fit(tail, floc=0.0)
-    return SplicedParams(thr_q=q, thr=thr, mu=mu, sigma=sigma, gpd_c=c, gpd_scale=scale)
 
-def sample_spliced(n: int, p: SplicedParams, seed: Optional[int]=None) -> np.ndarray:
+    # GPD on tail (fallback if few tail points)
+    if tail.size < 10:
+        gpd_c, gpd_scale = 0.25, max(thr, 1.0) * 0.5
+    else:
+        gpd_c, _loc, gpd_scale = stats.genpareto.fit(tail, floc=0.0)
+
+    return SplicedParams(thr_q=q, thr=thr, mu=mu, sigma=sigma, gpd_c=gpd_c, gpd_scale=gpd_scale)
+
+
+def sample_spliced(n: int, p: SplicedParams, seed: Optional[int] = None) -> np.ndarray:
+    """Draw severities from the spliced distribution."""
     rng = np.random.default_rng(seed)
     u = rng.random(n)
-    out = np.empty(n)
+    out = np.empty(n, dtype=float)
+
     mask_body = u <= p.thr_q
-    # body ~ Lognormal
+    # Body ~ Lognormal
     out[mask_body] = np.exp(rng.normal(p.mu, p.sigma, mask_body.sum()))
-    # tail ~ thr + GPD
+    # Tail ~ thr + GPD
     ut = rng.random((~mask_body).sum())
-    out[~mask_body] = p.thr + stats.genpareto.ppf(ut, p.gpd_c, 0, p.gpd_scale)
+    out[~mask_body] = p.thr + stats.genpareto.ppf(ut, p.gpd_c, 0.0, p.gpd_scale)
     return out
 
-# ---------- Frequency: Hurdle Poisson / NegBin with optional Bayesian λ ----------
+
+# ---------------------------------------------------------------------
+# Frequency: hurdle Bernoulli(any) x (Poisson or NegBin) count
+# ---------------------------------------------------------------------
+
 @dataclass
 class FreqParams:
+    """Frequency model for annual incident counts."""
     lam: float                 # mean incidents/year
-    p_any: float = 0.85        # hurdle: prob(any incident this year)
-    negbin: bool = False       # use NegBin for overdispersion
-    r: float = 1.5             # NegBin dispersion
+    p_any: float = 0.85        # hurdle: probability there is any incident this year
+    negbin: bool = False       # if True, use NegBin for overdispersion
+    r: float = 1.5             # NegBin dispersion (larger r => closer to Poisson)
 
-def sample_frequency(n_years: int, fp: FreqParams, seed: Optional[int]=None) -> np.ndarray:
+
+def sample_frequency(n_years: int, fp: FreqParams, seed: Optional[int] = None) -> np.ndarray:
+    """Sample annual incident counts under a hurdle model."""
     rng = np.random.default_rng(seed)
     any_breach = rng.binomial(1, fp.p_any, n_years)
+
     if fp.negbin:
-        # NegBin with mean=lam and dispersion r  -> p = r/(r+lam)
-        p = fp.r / (fp.r + fp.lam)
+        # NegBin with mean=lam and dispersion r  -> success prob p = r / (r + lam)
+        p = fp.r / (fp.r + fp.lam) if (fp.r + fp.lam) > 0 else 1.0
         counts = stats.nbinom.rvs(fp.r, p, size=n_years, random_state=rng)
     else:
         counts = rng.poisson(fp.lam, n_years)
-    # hurdle: zero or at least 1
+
+    # Hurdle: force zero where any_breach=0, else at least one event
     return np.where(any_breach == 0, 0, np.maximum(counts, 1))
 
-def posterior_lambda(alpha0: float, beta0: float, k: int, T: float, draws: int, seed: Optional[int]=None) -> np.ndarray:
-    """Gamma(alpha0, beta0) prior; observe k incidents over T years; returns lambda samples."""
-    rng = np.random.default_rng(seed)
-    alpha_post = alpha0 + k
-    beta_post = beta0 + T
-    return rng.gamma(alpha_post, 1.0/beta_post, size=draws)
 
-# ---------- Loss model glue ----------
+def posterior_lambda(
+    alpha0: float,
+    beta0: float,
+    k: int,
+    T: float,
+    draws: int,
+    seed: Optional[int] = None
+) -> np.ndarray:
+    """
+    Gamma(alpha0, beta0) prior for lambda; observe k incidents in T years.
+    Returns samples from posterior lambda ~ Gamma(alpha0 + k, beta0 + T).
+    """
+    rng = np.random.default_rng(seed)
+    alpha_post = alpha0 + max(k, 0)
+    beta_post = beta0 + max(T, 0.0)
+    return rng.gamma(alpha_post, 1.0 / beta_post, size=draws)
+
+
+# ---------------------------------------------------------------------
+# Model config and control effects
+# ---------------------------------------------------------------------
+
 @dataclass
 class ModelConfig:
     trials: int
@@ -81,23 +140,30 @@ class ModelConfig:
     record_cap: int = 250_000
     cost_per_record: float = 175.0
 
+
 @dataclass
 class ControlEffects:
-    # Multipliers applied to frequency & tail; keep 1.0 = no change
+    """
+    Multiplicative effects applied to frequency and tail severity.
+    1.0 means no change.
+    """
     lam_mult: float = 1.0
     p_any_mult: float = 1.0
     gpd_scale_mult: float = 1.0
 
+
 def build_spliced_from_priors(cfg: ModelConfig) -> SplicedParams:
     """
-    Simple prior that maps 'records × $/record' into a starting loss sample,
-    then fits a spliced distribution. Replace with real fitting when your dataset is wired.
+    Lightweight prior for severity:
+    Draw synthetic losses from Beta fraction of records * cost_per_record,
+    then fit the spliced (lognormal + GPD) model. Replace with a real fit
+    when you wire in your empirical dataset.
     """
     rng = np.random.default_rng(cfg.seed + 9)
-    # Draw synthetic losses from Beta fraction of records × cost_per_record
-    frac = rng.beta(0.8, 8.0, size=50_000)  # skewed toward smaller events; long tail via splice
+    frac = rng.beta(0.8, 8.0, size=50_000)  # many small, few large
     base_losses = np.minimum(frac * cfg.record_cap, cfg.record_cap) * cfg.cost_per_record
     return _fit_spliced_from_losses(base_losses, q=0.95)
+
 
 def simulate_annual_losses(
     cfg: ModelConfig,
@@ -106,40 +172,52 @@ def simulate_annual_losses(
     ce: ControlEffects = ControlEffects()
 ) -> np.ndarray:
     """
-    Simulate distribution of annual loss with controls applied causally:
-    - frequency: lam and p_any scaling
-    - severity tail: GPD scale scaling
+    Simulate a distribution of annual losses with causal control effects:
+      - Frequency: scale lambda and p_any
+      - Severity tail: scale GPD scale parameter
     """
-    # apply control effects
+    # Apply control effects to frequency
     lam = max(fp.lam * ce.lam_mult, 0.0)
-    p_any = np.clip(fp.p_any * ce.p_any_mult, 0.0, 1.0)
+    p_any = float(np.clip(fp.p_any * ce.p_any_mult, 0.0, 1.0))
 
-    sp2 = SplicedParams(**{**sp.__dict__})
+    # Apply control effects to severity tail
+    sp2 = SplicedParams(**sp.__dict__)
     sp2.gpd_scale = max(sp.gpd_scale * ce.gpd_scale_mult, 1.0)
 
     rng = np.random.default_rng(cfg.seed)
-    counts = sample_frequency(cfg.trials, FreqParams(lam=lam, p_any=p_any, negbin=fp.negbin, r=fp.r), seed=cfg.seed+1)
-    # sample all severities up front (upper bound) for speed
-    max_events = int(np.clip(counts.max(), 0, 10_000))
-    sev_pool = sample_spliced(max(1, max_events * 4), sp2, seed=cfg.seed+2)
+    counts = sample_frequency(
+        cfg.trials,
+        FreqParams(lam=lam, p_any=p_any, negbin=fp.negbin, r=fp.r),
+        seed=cfg.seed + 1,
+    )
 
-    annual = np.zeros(cfg.trials)
+    # Pre-sample a pool of severities for speed (expand if needed)
+    max_events = int(np.clip(counts.max(), 0, 10_000))
+    sev_pool = sample_spliced(max(1, max_events * 4), sp2, seed=cfg.seed + 2)
+
+    annual = np.zeros(cfg.trials, dtype=float)
     cursor = 0
     for i, k in enumerate(counts):
         if k == 0:
             continue
         need = int(k)
-        if cursor + need > len(sev_pool):
-            # refill
-            sev_pool = np.concatenate([sev_pool, sample_spliced(max(need * 2, 1000), sp2, seed=rng.integers(1e9))])
-        annual[i] = sev_pool[cursor:cursor+need].sum()
+        if cursor + need > sev_pool.size:
+            # Refill the pool if exhausted
+            refill = sample_spliced(max(need * 2, 1000), sp2, seed=int(rng.integers(1_000_000_000)))
+            sev_pool = np.concatenate([sev_pool, refill])
+        annual[i] = sev_pool[cursor: cursor + need].sum()
         cursor += need
 
     return annual
 
-# ---------- Metrics & curves ----------
+
+# ---------------------------------------------------------------------
+# Metrics and curves
+# ---------------------------------------------------------------------
+
 def compute_metrics(losses: np.ndarray, net_worth: float) -> Dict[str, float]:
-    losses = np.asarray(losses)
+    """Compute EAL and VaR metrics plus VaR-to-Net-Worth ratios."""
+    losses = np.asarray(losses, dtype=float)
     eal = float(np.mean(losses))
     v95 = float(np.quantile(losses, 0.95))
     v99 = float(np.quantile(losses, 0.99))
@@ -147,30 +225,37 @@ def compute_metrics(losses: np.ndarray, net_worth: float) -> Dict[str, float]:
         EAL=eal,
         VaR95=v95,
         VaR99=v99,
-        VaR95_to_NetWorth=v95 / net_worth if net_worth > 0 else np.nan,
-        VaR99_to_NetWorth=v99 / net_worth if net_worth > 0 else np.nan
+        VaR95_to_NetWorth=(v95 / net_worth) if net_worth > 0 else np.nan,
+        VaR99_to_NetWorth=(v99 / net_worth) if net_worth > 0 else np.nan,
     )
 
-def lec(losses: np.ndarray, n: int=200) -> pd.DataFrame:
-    """Loss Exceedance Curve: P(Loss ≥ x)."""
-    x = np.quantile(losses, np.linspace(0.01, 0.999, n))
-    probs = (losses[:, None] >= x[None, :]).mean(axis=0)
-    return pd.DataFrame({"loss": x, "exceed_prob": probs})
 
-def lec_bands(samples: np.ndarray, n: int=200, level: float=0.90) -> pd.DataFrame:
+def lec(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
+    """Loss Exceedance Curve: for a grid of x, compute P(Loss >= x)."""
+    losses = np.asarray(losses, dtype=float)
+    grid = np.quantile(losses, np.linspace(0.01, 0.999, n))
+    exceed = (losses[:, None] >= grid[None, :]).mean(axis=0)
+    return pd.DataFrame({"loss": grid, "exceed_prob": exceed})
+
+
+def lec_bands(samples: np.ndarray, n: int = 200, level: float = 0.90) -> pd.DataFrame:
     """
-    Credible bands for LEC: samples is (S, T) array of annual losses from S posterior draws.
-    Returns loss grid & (lower, median, upper) exceed prob.
+    Credible bands for the LEC.
+    samples: array of shape (S, T) where S is posterior draws and T is trials per draw.
+    Returns a grid of losses with (lo, median, hi) exceedance probabilities.
     """
-    # build a common grid from pooled losses
+    samples = np.asarray(samples, dtype=float)
     pooled = samples.reshape(-1)
     grid = np.quantile(pooled, np.linspace(0.01, 0.999, n))
-    # compute exceed probs per posterior sample
-    ex = []
-    for s in samples:
-        ex.append((s[:, None] >= grid[None, :]).mean(axis=0))
-    ex = np.stack(ex, axis=0)
-    lo = np.quantile(ex, (1-level)/2, axis=0)
+
+    # Exceedance per posterior draw
+    ex = np.empty((samples.shape[0], grid.size), dtype=float)
+    for i, s in enumerate(samples):
+        ex[i] = (s[:, None] >= grid[None, :]).mean(axis=0)
+
+    alpha = (1.0 - level) / 2.0
+    lo = np.quantile(ex, alpha, axis=0)
     md = np.quantile(ex, 0.5, axis=0)
-    hi = np.quantile(ex, 1-(1-level)/2, axis=0)
+    hi = np.quantile(ex, 1.0 - alpha, axis=0)
+
     return pd.DataFrame({"loss": grid, "lo": lo, "median": md, "hi": hi})
