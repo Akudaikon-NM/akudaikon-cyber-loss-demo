@@ -162,8 +162,10 @@ def _round_to_step(x: float, step: float = STEP, prec: int = PREC) -> float:
     # aligns value to the widget step to avoid precision conflicts
     return round(step * round(x / step), prec)
 
+# keep the same helpers/constants (_round_to_step, ALPHA_MIN, BETA_MIN, STEP, PREC)
+
 def seed_prior_cb():
-    # read current k, T, w directly from session_state (always present)
+    # read values that the widgets already put in session_state
     k = float(st.session_state.get("adv_k_obs", 0))
     T = float(st.session_state.get("adv_T_obs", 0.0))
     w = float(st.session_state.get("adv_pseudo_w", 2.0))
@@ -173,20 +175,22 @@ def seed_prior_cb():
     alpha_suggest = max(ALPHA_MIN, lam_hat * w)
     beta_suggest  = max(BETA_MIN,  w)
 
-    # align to widget steps to avoid Streamlit complaining
+    # align to widget steps to avoid precision edge cases
     alpha_suggest = _round_to_step(float(alpha_suggest))
     beta_suggest  = _round_to_step(float(beta_suggest))
 
-    # final guard-rails (respect number_input bounds)
+    # final guard-rails (respect widget bounds)
     alpha_suggest = max(ALPHA_MIN, alpha_suggest)
     beta_suggest  = max(BETA_MIN,  beta_suggest)
 
+    # Update controlled-widget state. Streamlit auto-reruns after callbacks.
     st.session_state.update({
         "adv_alpha0": float(alpha_suggest),
         "adv_beta0":  float(beta_suggest),
         "adv_use_bayes": True,
     })
-    st.rerun()
+    # no st.rerun() needed (and is a no-op in callbacks on current Streamlit)
+
 
 if T_obs and T_obs > 0:
     lam_hat = float(k_obs) / float(T_obs)
