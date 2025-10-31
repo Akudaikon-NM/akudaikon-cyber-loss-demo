@@ -394,6 +394,7 @@ with st.sidebar.form("scenario_form"):
 # ---------------------------------------------------------------------
 if submitted:
     with st.spinner("Simulating..."):
+        # -------------------- Config --------------------
         cfg = ModelConfig(
             trials=int(trials),
             net_worth=float(net_worth),
@@ -402,27 +403,32 @@ if submitted:
             cost_per_record=float(cost_per_customer),
         )
 
-        # Frequency (with optional Bayesian update)
+        # ---------------- Frequency (Bayesian optional) ----------------
         lam_base = float(lam)
         lam_draws = None
         if use_bayes and T_obs > 0:
             lam_draws = posterior_lambda(
                 float(alpha0), float(beta0),
                 int(k_obs), float(T_obs),
-                draws=200, seed=int(seed)+100
+                draws=200, seed=int(seed) + 100
             )
             lam_base = float(np.median(lam_draws))
 
-        fp = FreqParams(lam=lam_base, p_any=0.85, negbin=bool(use_negbin), r=float(disp_r))
+        fp = FreqParams(
+            lam=lam_base,
+            p_any=0.85,
+            negbin=bool(use_negbin),
+            r=float(disp_r)
+        )
 
-        # Severity prior (spliced)
+        # ---------------- Severity prior (spliced) ----------------
         sp: SplicedParams = build_spliced_from_priors(cfg)
 
-        # Baseline
+        # ---------------- Baseline ----------------
         base_losses = simulate_annual_losses(cfg, fp, sp)
         base_m = compute_metrics(base_losses, cfg.net_worth)
 
-                # ---------------- Controlled (data-driven effects) ----------------
+        # ---------------- Controlled (data-driven effects) ----------------
         # Pull the latest shares chosen/uploaded in the sidebar
         ash = st.session_state.get("_action_shares", DEFAULT_ACTION_SHARES)
         psh = st.session_state.get("_pattern_shares", DEFAULT_PATTERN_SHARES)
@@ -443,23 +449,23 @@ if submitted:
         delta_eal = base_m["EAL"] - ctrl_m["EAL"]
         rosi = ((delta_eal - ctrl_cost) / ctrl_cost * 100.0) if ctrl_cost > 0 else np.nan
 
+        # ----------------------------- KPI tiles --------------------------
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("EAL (Baseline)",   f"${base_m['EAL']:,.0f}")
+        c2.metric("EAL (Controlled)", f"${ctrl_m['EAL']:,.0f}", delta=f"-${delta_eal:,.0f}")
+        c3.metric("VaR95 (Base→Ctrl)", f"${base_m['VaR95']:,.0f}",
+                  delta=f"-${(base_m['VaR95'] - ctrl_m['VaR95']):,.0f}")
+        c4.metric("VaR99 (Base→Ctrl)", f"${base_m['VaR99']:,.0f}",
+                  delta=f"-${(base_m['VaR99'] - ctrl_m['VaR99']):,.0f}")
 
-       # ----- KPI tiles ------------------------------------------------------
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("EAL (Baseline)",   f"${base_m['EAL']:,.0f}")
-c2.metric("EAL (Controlled)", f"${ctrl_m['EAL']:,.0f}", delta=f"-${delta_eal:,.0f}")
-c3.metric("VaR95 (Base→Ctrl)", f"${base_m['VaR95']:,.0f}",
-          delta=f"-${(base_m['VaR95']-ctrl_m['VaR95']):,.0f}")
-c4.metric("VaR99 (Base→Ctrl)", f"${base_m['VaR99']:,.0f}",
-          delta=f"-${(base_m['VaR99']-ctrl_m['VaR99']):,.0f}")
+        d1, d2, d3 = st.columns(3)
+        d1.metric("VaR95 / Net Worth (Base)", f"{base_m['VaR95_to_NetWorth']*100:,.2f}%")
+        d2.metric("VaR95 / Net Worth (Ctrl)", f"{ctrl_m['VaR95_to_NetWorth']*100:,.2f}%")
+        d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
 
-d1, d2, d3 = st.columns(3)
-d1.metric("VaR95 / Net Worth (Base)", f"{base_m['VaR95_to_NetWorth']*100:,.2f}%")
-d2.metric("VaR95 / Net Worth (Ctrl)", f"{ctrl_m['VaR95_to_NetWorth']*100:,.2f}%")
-d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
+        st.markdown("---")
 
-
-        # LEC (with optional credible bands)
+        # ---------------- LEC (with optional credible bands) --------------
         lec_b = lec(base_losses, n=200).assign(scenario="Baseline")
         lec_c = lec(ctrl_losses, n=200).assign(scenario="Controlled")
 
@@ -477,10 +483,11 @@ d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
                 samples.append(simulate_annual_losses(cfg, fp_i, sp))
             samples = np.stack(samples, axis=0)
             band_b = lec_bands(samples, n=200, level=0.90)
-            fig.add_scatter(x=band_b["loss"], y=band_b["hi"], mode="lines", name="Baseline 90% hi",
-                            line=dict(width=0.5), showlegend=False)
-            fig.add_scatter(x=band_b["loss"], y=band_b["lo"], mode="lines", name="Baseline 90% lo",
-                            line=dict(width=0.5), fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
+            fig.add_scatter(x=band_b["loss"], y=band_b["hi"], mode="lines",
+                            name="Baseline 90% hi", line=dict(width=0.5), showlegend=False)
+            fig.add_scatter(x=band_b["loss"], y=band_b["lo"], mode="lines",
+                            name="Baseline 90% lo", line=dict(width=0.5),
+                            fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
 
             # Controlled bands
             samples_c = []
@@ -489,10 +496,11 @@ d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
                 samples_c.append(simulate_annual_losses(cfg, fp_i, sp, ce))
             samples_c = np.stack(samples_c, axis=0)
             band_c = lec_bands(samples_c, n=200, level=0.90)
-            fig.add_scatter(x=band_c["loss"], y=band_c["hi"], mode="lines", name="Controlled 90% hi",
-                            line=dict(width=0.5), showlegend=False)
-            fig.add_scatter(x=band_c["loss"], y=band_c["lo"], mode="lines", name="Controlled 90% lo",
-                            line=dict(width=0.5), fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
+            fig.add_scatter(x=band_c["loss"], y=band_c["hi"], mode="lines",
+                            name="Controlled 90% hi", line=dict(width=0.5), showlegend=False)
+            fig.add_scatter(x=band_c["loss"], y=band_c["lo"], mode="lines",
+                            name="Controlled 90% lo", line=dict(width=0.5),
+                            fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
 
         fig.update_layout(title="Loss Exceedance Curve (LEC) with Optional Credible Bands",
                           xaxis_title="Annual Loss (USD)", yaxis_title="P(Loss >= x)")
@@ -500,7 +508,7 @@ d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
         fig.update_yaxes(type="log", range=[-2.5, 0])
         st.plotly_chart(fig, use_container_width=True)
 
-        # Summary table
+        # ---------------- Summary table -----------------------------------
         st.subheader("Summary")
         summary_df = pd.DataFrame({
             "Metric": ["EAL", "VaR95", "VaR99", "VaR95/NetWorth", "VaR99/NetWorth",
@@ -512,9 +520,21 @@ d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
                           ctrl_m["VaR95_to_NetWorth"], ctrl_m["VaR99_to_NetWorth"],
                           ctrl_cost, delta_eal, rosi],
         })
-        st.dataframe(summary_df.style.format({"Baseline": "{:,.2f}", "Controlled": "{:,.2f}"}), use_container_width=True)
+        st.dataframe(
+            summary_df.style.format({"Baseline": "{:,.2f}", "Controlled": "{:,.2f}"}),
+            use_container_width=True
+        )
 
-        # Download CSV of annual losses
+        # ---------------- Download CSV ------------------------------------
         buf = io.StringIO()
-        pd.DataFrame({"annual_loss_baseline": base_losses, "annual_loss_controlled": ctrl_losses}).to_csv(buf, index=False)
-        st.download_button("Download annual losses (CSV)", buf.getvalue(), "cyber_annual_losses.csv", "text/csv")
+        pd.DataFrame({
+            "annual_loss_baseline": base_losses,
+            "annual_loss_controlled": ctrl_losses
+        }).to_csv(buf, index=False)
+        st.download_button(
+            "Download annual losses (CSV)",
+            buf.getvalue(),
+            "cyber_annual_losses.csv",
+            "text/csv"
+        )
+
