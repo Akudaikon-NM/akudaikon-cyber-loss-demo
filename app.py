@@ -432,8 +432,7 @@ except Exception:
     # Safe fallback to your existing static mapping
     ce = control_effects(ctrl)
 
-        ctrl_losses = simulate_annual_losses(cfg, fp, sp, ce)
-        ctrl_m = compute_metrics(ctrl_losses, cfg.net_worth)
+
 
         # ROI
         ctrl_cost = total_cost(ctrl, costs)
