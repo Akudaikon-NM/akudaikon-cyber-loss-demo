@@ -1,4 +1,20 @@
-streamlit==1.39.0
-numpy==1.26.4
-pandas==2.2.2
-plotly==5.24.1
+# ============================================
+# Core Streamlit Cyber-Loss Demo Dependencies
+# ============================================
+
+# --- Web App Framework ---
+streamlit==1.39.0        # interactive UI and dashboarding
+
+# --- Numerical & Data Analysis ---
+numpy==1.26.4             # fast numerical operations
+pandas==2.2.2             # structured data handling (DataFrame support)
+
+# --- Visualization ---
+plotly==5.24.1            # interactive charts (LEC, credible bands, ROI)
+
+# --- (Optional) Statistical Modeling ---
+scipy==1.13.1             # used for GPD / lognormal fitting and random draws
+
+# ============================================
+# End of requirements
+# ============================================
