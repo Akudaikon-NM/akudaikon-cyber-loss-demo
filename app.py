@@ -139,19 +139,42 @@ with st.sidebar.expander("Advanced frequency", expanded=False):
     disp_r      = st.number_input("NegBin dispersion r", min_value=0.5, max_value=10.0, value=1.5, step=0.1, key="adv_disp_r")
 
     # --- Calibration helper (k,T → λ̂ ; optional prior seeding) ---
-    st.markdown("**Calibration (from dataset slice)**")
-    if T_obs and T_obs > 0:
-        lam_hat = float(k_obs) / float(T_obs)
-        st.caption(f"λ̂ (k/T) = {lam_hat:.4f} incidents/year")
-        with st.popover("Seed prior from λ̂"):
-            w = st.number_input("Pseudo-years (weight for prior)", min_value=0.1, max_value=50.0, value=2.0, step=0.1, key="adv_pseudo_w")
-            if st.button("Apply prior α₀=λ̂·w, β₀=w", key="btn_seed_prior"):
-                st.session_state["adv_alpha0"] = lam_hat * w
-                st.session_state["adv_beta0"]  = w
-                st.session_state["adv_use_bayes"] = True
-                st.success("Prior seeded from λ̂.")
-    else:
-        st.caption("Provide k and T to compute λ̂ (and optionally seed a weak prior).")
+st.markdown("**Calibration (from dataset slice)**")
+
+# Initialize keys up-front so __setitem__ never touches missing keys
+_defaults = {
+    "adv_use_bayes": False,
+    "adv_alpha0": 2.0,
+    "adv_beta0": 8.0,
+    "adv_pseudo_w": 2.0,
+}
+for _k, _v in _defaults.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+if T_obs and T_obs > 0:
+    lam_hat = float(k_obs) / float(T_obs)
+    st.caption(f"λ̂ (k/T) = {lam_hat:.4f} incidents/year")
+
+    cols = st.columns([1, 1])
+    with cols[0]:
+        w = st.number_input(
+            "Pseudo-years (weight for prior)",
+            min_value=0.1, max_value=50.0,
+            value=float(st.session_state["adv_pseudo_w"]),
+            step=0.1, key="adv_pseudo_w"
+        )
+    with cols[1]:
+        if st.button("Apply prior α₀=λ̂·w, β₀=w", use_container_width=True):
+            # Update the widget-backed values safely and rerun
+            st.session_state["adv_alpha0"] = float(lam_hat * st.session_state["adv_pseudo_w"])
+            st.session_state["adv_beta0"]  = float(st.session_state["adv_pseudo_w"])
+            st.session_state["adv_use_bayes"] = True
+            st.success("Prior seeded from λ̂.")
+            st.rerun()
+else:
+    st.caption("Provide k and T to compute λ̂ (and optionally seed a weak prior).")
+
 
 # -----------------------------------------------
 # NAICS 52 (Finance & Insurance) presets
