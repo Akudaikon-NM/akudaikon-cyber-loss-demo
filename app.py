@@ -138,17 +138,55 @@ with st.sidebar.expander("Advanced frequency", expanded=False):
     use_negbin  = st.checkbox("Use Negative Binomial (overdispersion)", value=False, key="adv_use_negbin")
     disp_r      = st.number_input("NegBin dispersion r", min_value=0.5, max_value=10.0, value=1.5, step=0.1, key="adv_disp_r")
 
-    # --- Calibration helper (k,T → λ̂ ; optional prior seeding) ---
+   # --- Calibration helper (k,T → λ̂ ; optional prior seeding) ---
 st.markdown("**Calibration (from dataset slice)**")
 
-# Ensure keys exist (pre-init)
-_defaults = {"adv_use_bayes": False, "adv_alpha0": 2.0, "adv_beta0": 8.0, "adv_pseudo_w": 2.0}
-for _k, _v in _defaults.items():
-    st.session_state.setdefault(_k, _v)
-
-# Keep these in sync with your number_input minima
+# Keep these consistent with your number_input minima/steps above
 ALPHA_MIN = 0.01
 BETA_MIN  = 0.01
+STEP      = 0.1     # your number_inputs for alpha/beta use step=0.1
+PREC      = 4       # rounding precision for safety vs STEP
+
+# Ensure keys exist once (types matter for Streamlit widgets)
+_defaults = {
+    "adv_use_bayes": False,
+    "adv_alpha0": 2.0,
+    "adv_beta0": 8.0,
+    "adv_pseudo_w": 2.0,
+}
+for _k, _v in _defaults.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+def _round_to_step(x: float, step: float = STEP, prec: int = PREC) -> float:
+    # aligns value to the widget step to avoid precision conflicts
+    return round(step * round(x / step), prec)
+
+def seed_prior_cb():
+    # read current k, T, w directly from session_state (always present)
+    k = float(st.session_state.get("adv_k_obs", 0))
+    T = float(st.session_state.get("adv_T_obs", 0.0))
+    w = float(st.session_state.get("adv_pseudo_w", 2.0))
+
+    lam_hat = (k / T) if T > 0 else 0.0
+
+    alpha_suggest = max(ALPHA_MIN, lam_hat * w)
+    beta_suggest  = max(BETA_MIN,  w)
+
+    # align to widget steps to avoid Streamlit complaining
+    alpha_suggest = _round_to_step(float(alpha_suggest))
+    beta_suggest  = _round_to_step(float(beta_suggest))
+
+    # final guard-rails (respect number_input bounds)
+    alpha_suggest = max(ALPHA_MIN, alpha_suggest)
+    beta_suggest  = max(BETA_MIN,  beta_suggest)
+
+    st.session_state.update({
+        "adv_alpha0": float(alpha_suggest),
+        "adv_beta0":  float(beta_suggest),
+        "adv_use_bayes": True,
+    })
+    st.rerun()
 
 if T_obs and T_obs > 0:
     lam_hat = float(k_obs) / float(T_obs)
@@ -156,31 +194,26 @@ if T_obs and T_obs > 0:
 
     cols = st.columns([1, 1, 1])
     with cols[0]:
-        w = st.number_input(
+        st.number_input(
             "Pseudo-years (weight for prior)",
             min_value=0.1, max_value=50.0,
             value=float(st.session_state["adv_pseudo_w"]),
             step=0.1, key="adv_pseudo_w"
         )
 
-    # Compute suggested priors, clamped to widget minima
-    alpha_suggest = max(ALPHA_MIN, lam_hat * st.session_state["adv_pseudo_w"])
-    beta_suggest  = max(BETA_MIN,  st.session_state["adv_pseudo_w"])
+    # preview suggested values (clamped + rounded to step)
+    _alpha_preview = _round_to_step(max(ALPHA_MIN, lam_hat * float(st.session_state["adv_pseudo_w"])))
+    _beta_preview  = _round_to_step(max(BETA_MIN,  float(st.session_state["adv_pseudo_w"])))
 
     with cols[1]:
-        st.write(f"Suggested α₀ = max({ALPHA_MIN}, λ̂·w) = **{alpha_suggest:.4f}**")
-        st.write(f"Suggested β₀ = max({BETA_MIN}, w) = **{beta_suggest:.4f}**")
+        st.write(f"Suggested α₀ = max({ALPHA_MIN}, λ̂·w) → **{_alpha_preview:.4f}**")
+        st.write(f"Suggested β₀ = max({BETA_MIN}, w) → **{_beta_preview:.4f}**")
 
     with cols[2]:
-        # Disable if k/T == 0 to make the UX clear
-        disabled = lam_hat <= 0.0
-        tip = "Need k>0 to seed informative prior." if disabled else ""
-        if st.button("Apply prior α₀=λ̂·w, β₀=w", use_container_width=True, disabled=disabled, help=tip):
-            st.session_state["adv_alpha0"]   = float(alpha_suggest)
-            st.session_state["adv_beta0"]    = float(beta_suggest)
-            st.session_state["adv_use_bayes"] = True
-            st.success("Prior seeded from λ̂ (clamped to widget minima).")
-            st.rerun()
+        disabled = (lam_hat <= 0.0)
+        tip = "Need k>0 (or T>0) for informative seeding." if disabled else "Apply and enable Bayesian frequency."
+        st.button("Apply prior α₀=λ̂·w, β₀=w", use_container_width=True,
+                  disabled=disabled, help=tip, on_click=seed_prior_cb)
 else:
     st.caption("Provide k and T to compute λ̂ (and optionally seed a weak prior).")
 
