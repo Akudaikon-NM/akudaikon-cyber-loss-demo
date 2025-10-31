@@ -27,6 +27,48 @@ with st.sidebar.expander("Advanced frequency", expanded=False):
     T_obs       = st.number_input("Observation years",  0.0, 50.0, 0.0, step=0.5, key="adv_T_obs")
     use_negbin  = st.checkbox("Use Negative Binomial (overdispersion)", value=False, key="adv_use_negbin")
     disp_r      = st.number_input("NegBin dispersion r", 0.5, 10.0, 1.5, step=0.1, key="adv_disp_r")
+# -----------------------------------------------
+# Finance NAICS presets (applied via session_state)
+# -----------------------------------------------
+NAICS_FINANCE_PRESETS = {
+    "522110 — Commercial Banking": {
+        "lambda": 0.60,          # mean incidents / yr
+        "records_cap": 5_000_000,
+        "cost_per_record": 185.0,
+        "net_worth": 2_000_000_000.0,
+    },
+    "522130 — Credit Unions": {
+        "lambda": 0.35,
+        "records_cap": 250_000,
+        "cost_per_record": 185.0,
+        "net_worth": 100_000_000.0,
+    },
+    "522190 — Other Depository Credit Intermediation": {
+        "lambda": 0.45,
+        "records_cap": 1_000_000,
+        "cost_per_record": 185.0,
+        "net_worth": 500_000_000.0,
+    },
+}
+
+with st.sidebar.expander("Finance NAICS presets", expanded=False):
+    use_naics = st.checkbox("Use preset", value=False, key="naics_enable")
+    choice = st.selectbox(
+        "Select NAICS (Finance)",
+        list(NAICS_FINANCE_PRESETS.keys()),
+        index=1,  # defaults to Credit Unions
+        disabled=not use_naics,
+        key="naics_choice",
+    )
+
+    if use_naics:
+        p = NAICS_FINANCE_PRESETS[choice]
+        # Seed form inputs via session_state so the form shows these values
+        st.session_state["in_lambda"]      = p["lambda"]
+        st.session_state["in_records_cap"] = p["records_cap"]
+        st.session_state["in_cpr"]         = p["cost_per_record"]
+        st.session_state["in_networth"]    = p["net_worth"]
+        st.caption(f"Preset applied: {choice}")
 
 # ---------------------------------------------------------------------
 # Scenario + Controls (grouped in ONE form)
