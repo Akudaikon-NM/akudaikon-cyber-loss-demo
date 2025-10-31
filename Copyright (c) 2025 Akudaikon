@@ -1,61 +1,21 @@
+MIT License
 
----
+Copyright (c) 2025 Akudaikon LLC
 
-# 4) “How this implements security cost-effectively” (repo blurb or LinkedIn comment)
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the “Software”), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-This demo frames security as a *capital allocation* problem. Each control is treated like a mini-investment with an annual cost and an expected reduction in loss (ΔEAL and ΔVaR). That lets you:
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
 
-- **Rank controls by $/risk-reduction** (e.g., cost per $100k of EAL reduction).  
-- **Pick portfolios** of controls that maximize risk-reduction for a given budget.  
-- **Report in CFO-native terms**: expected savings vs. spend, payback period, VaR impact.  
-
-As you replace the placeholder multipliers with your **calibrated control effectiveness** (from testing, audit findings, MDR/EDR telemetry, or industry studies), the app becomes a repeatable decision tool for quarterly planning and board updates.
-
----
-
-# 5) Sample scenario (ready to quote)
-
-- Sector: **522110 / Commercial Banking**  
-- Members/customers: **300,000**  
-- Net Worth: **$1.0B**  
-- Annual incident rate (λ): **0.22**  
-- Cost per customer: **$175**  
-- Trials: **10,000**  
-- Controls: check **Server Hardening/Patching** and **External Surface/MFA**  
-- Annual control costs: Server $50k, External $100k
-
-**Results (illustrative)**  
-- **EAL (baseline):** ~$3.20M  
-- **EAL (controlled):** ~$3.00M  
-- **ΔEAL (savings):** ~$200k/yr vs **$150k/yr** in control cost → **~1.3× ROI**  
-- **VaR95 / Net Worth:** ~1.01% → ~0.95% (directionally improved)  
-- **LEC:** controlled curve shifts down—lower probability of extreme losses at each loss level.
-
-How to present this:
-- “With two targeted controls costing ~$150k/yr, we reduce expected losses by ~$200k/yr and lower tail risk. That’s positive ROI and improves our worst-case posture—approved.”
-
----
-
-## Bonus: quick LEC graphic for your post
-
-If you want a clean Loss Exceedance Curve image, run this locally (or in your Codespace) to save `akudaikon_lec.png`:
-
-```python
-# save as make_lec.py and run: python make_lec.py
-import numpy as np
-import matplotlib.pyplot as plt
-
-loss = np.logspace(3, 8, 200)  # $1k .. $100M
-baseline = np.clip(1.2 * np.exp(- (np.log10(loss) - 5.5)**2 / (2*0.7**2)), 1e-5, 1)
-controlled = np.clip(0.9 * np.exp(- (np.log10(loss) - 5.7)**2 / (2*0.7**2)), 1e-5, 1)
-
-plt.figure(figsize=(8,5))
-plt.loglog(loss, baseline, label='Baseline')
-plt.loglog(loss, controlled, label='Controlled')
-plt.xlabel('Loss (USD)')
-plt.ylabel('P(Loss ≥ x)')
-plt.title('Akudaikon | Loss Exceedance Curve (Demo)')
-plt.legend()
-plt.grid(True, which='both', ls=':')
-plt.tight_layout()
-plt.savefig('akudaikon_lec.png', dpi=200)
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
