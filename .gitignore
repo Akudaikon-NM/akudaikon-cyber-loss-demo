@@ -1,42 +1,73 @@
-# --- Python / build artifacts ---
+# ================================
+# 🔹 PYTHON & BUILD ARTIFACTS
+# ================================
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*.so
 *.egg-info/
-dist/
 build/
+dist/
 
-# --- Virtual envs ---
+# ================================
+# 🔹 VIRTUAL ENVIRONMENTS
+# ================================
 .venv/
 venv/
 .env/
-.env*/        # e.g., .env.local
+.env*/
+.envrc
 
-# --- Notebooks (optional) ---
+# ================================
+# 🔹 NOTEBOOKS (OPTIONAL)
+# ================================
 .ipynb_checkpoints/
 
-# --- OS noise ---
+# ================================
+# 🔹 OS / SYSTEM FILES
+# ================================
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# --- IDE / project files (optional) ---
+# ================================
+# 🔹 EDITOR / IDE SETTINGS
+# ================================
 .vscode/
 .idea/
+*.code-workspace
 
-# --- Streamlit ---
-.streamlit/secrets.toml   # keep secrets out of git
-# allow config to be committed if you use one:
-# .streamlit/config.toml  (DO NOT ignore this if you want to ship defaults)
+# ================================
+# 🔹 STREAMLIT
+# ================================
+# Keep local secrets out of version control
+.streamlit/secrets.toml
 
-# --- Data / cache (adjust as you like) ---
+# Allow config to be versioned if you ship defaults:
+# !.streamlit/config.toml
+
+# Streamlit cache and generated artifacts
+.streamlit/cache/
+.streamlit/artifacts/
+
+# ================================
+# 🔹 DATA / OUTPUT / CACHE
+# ================================
 data/
+datasets/
+output/
+logs/
 *.csv
 *.parquet
 *.xlsx
 *.json
+*.pkl
+*.tmp
 
-# Streamlit caches
-.streamlit/cache/
-.streamlit/artifacts/
+# ================================
+# 🔹 OTHER (OPTIONAL)
+# ================================
+# Local testing, coverage, or profiling outputs
+.coverage
+htmlcov/
+profiler/
 
