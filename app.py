@@ -434,24 +434,26 @@ except Exception:
 
 
 
-        # ROI
-        ctrl_cost = total_cost(ctrl, costs)
-        delta_eal = base_m["EAL"] - ctrl_m["EAL"]
-        rosi = ((delta_eal - ctrl_cost) / ctrl_cost * 100.0) if ctrl_cost > 0 else np.nan
+        # ----- ROI ------------------------------------------------------------
+ctrl_cost = total_cost(ctrl, costs)
+delta_eal = base_m["EAL"] - ctrl_m["EAL"]
+rosi = ((delta_eal - ctrl_cost) / ctrl_cost * 100.0) if ctrl_cost > 0 else float("nan")
 
-        # KPI tiles
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("EAL (Baseline)",   f"${base_m['EAL']:,.0f}")
-        c2.metric("EAL (Controlled)", f"${ctrl_m['EAL']:,.0f}", delta=f"-${delta_eal:,.0f}")
-        c3.metric("VaR95 (Base→Ctrl)", f"${base_m['VaR95']:,.0f}", delta=f"-${(base_m['VaR95']-ctrl_m['VaR95']):,.0f}")
-        c4.metric("VaR99 (Base→Ctrl)", f"${base_m['VaR99']:,.0f}", delta=f"-${(base_m['VaR99']-ctrl_m['VaR99']):,.0f}")
 
-        d1, d2, d3 = st.columns(3)
-        d1.metric("VaR95 / Net Worth (Base)", f"{base_m['VaR95_to_NetWorth']*100:,.2f}%")
-        d2.metric("VaR95 / Net Worth (Ctrl)", f"{ctrl_m['VaR95_to_NetWorth']*100:,.2f}%")
-        d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
+       # ----- KPI tiles ------------------------------------------------------
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("EAL (Baseline)",   f"${base_m['EAL']:,.0f}")
+c2.metric("EAL (Controlled)", f"${ctrl_m['EAL']:,.0f}", delta=f"-${delta_eal:,.0f}")
+c3.metric("VaR95 (Base→Ctrl)", f"${base_m['VaR95']:,.0f}",
+          delta=f"-${(base_m['VaR95']-ctrl_m['VaR95']):,.0f}")
+c4.metric("VaR99 (Base→Ctrl)", f"${base_m['VaR99']:,.0f}",
+          delta=f"-${(base_m['VaR99']-ctrl_m['VaR99']):,.0f}")
 
-        st.markdown("---")
+d1, d2, d3 = st.columns(3)
+d1.metric("VaR95 / Net Worth (Base)", f"{base_m['VaR95_to_NetWorth']*100:,.2f}%")
+d2.metric("VaR95 / Net Worth (Ctrl)", f"{ctrl_m['VaR95_to_NetWorth']*100:,.2f}%")
+d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
+
 
         # LEC (with optional credible bands)
         lec_b = lec(base_losses, n=200).assign(scenario="Baseline")
