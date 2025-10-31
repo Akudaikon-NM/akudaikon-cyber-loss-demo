@@ -12,131 +12,103 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
+st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
+st.title("Akudaikon | Cyber-Loss Demo")
+st.caption("Monte Carlo loss model with control ROI and optional Bayesian frequency.")
+
 # ---------------------------------------------------------------------
-# Advanced frequency options (Bayesian lambda and Negative Binomial)
+# Advanced frequency (outside the form so it doesn't reset on submit)
 # ---------------------------------------------------------------------
 with st.sidebar.expander("Advanced frequency", expanded=False):
-    use_bayes = st.checkbox("Bayesian lambda (Gamma prior + your data)", value=False)
-    alpha0 = st.number_input("lambda prior alpha", min_value=0.01, max_value=50.0, value=2.0, step=0.1)
-    beta0  = st.number_input("lambda prior beta",  min_value=0.01, max_value=50.0, value=8.0, step=0.1)
-    k_obs  = st.number_input("Incidents observed", min_value=0, max_value=100, value=0, step=1)
-    T_obs  = st.number_input("Observation years",  min_value=0.0, max_value=50.0, value=0.0, step=0.5)
+    use_bayes   = st.checkbox("Bayesian lambda (Gamma prior + your data)", value=False, key="adv_use_bayes")
+    alpha0      = st.number_input("lambda prior alpha", 0.01, 50.0, 2.0, step=0.1, key="adv_alpha0")
+    beta0       = st.number_input("lambda prior beta",  0.01, 50.0, 8.0, step=0.1, key="adv_beta0")
+    k_obs       = st.number_input("Incidents observed", 0, 100, 0, step=1, key="adv_k_obs")
+    T_obs       = st.number_input("Observation years",  0.0, 50.0, 0.0, step=0.5, key="adv_T_obs")
+    use_negbin  = st.checkbox("Use Negative Binomial (overdispersion)", value=False, key="adv_use_negbin")
+    disp_r      = st.number_input("NegBin dispersion r", 0.5, 10.0, 1.5, step=0.1, key="adv_disp_r")
 
-    use_negbin = st.checkbox("Use Negative Binomial (overdispersion)", value=False)
-    disp_r = st.number_input("NegBin dispersion r", min_value=0.5, max_value=10.0, value=1.5, step=0.1)
-# --- Core scenario inputs (Sidebar) ---
-st.sidebar.header("Scenario")
+# ---------------------------------------------------------------------
+# Scenario + Controls (grouped in ONE form)
+# ---------------------------------------------------------------------
+with st.sidebar.form("scenario_form"):
+    st.header("Scenario")
 
-trials = st.sidebar.number_input(
-    "Simulation trials", min_value=1_000, max_value=500_000, value=50_000, step=5_000
-)
-net_worth = st.sidebar.number_input(
-    "Net worth (USD)", min_value=0.0, value=1_000_000.0, step=100_000.0, format="%.0f"
-)
-seed = st.sidebar.number_input(
-    "Random seed", min_value=0, value=42, step=1
-)
-num_customers = st.sidebar.number_input(
-    "Records / customers cap", min_value=1, value=1_000_000, step=10_000
-)
-cost_per_customer = st.sidebar.number_input(
-    "Cost per record (USD)", min_value=1.0, value=150.0, step=10.0, format="%.2f"
-)
-lam = st.sidebar.number_input(
-    "Annual incident rate (lambda)", min_value=0.0, value=0.40, step=0.05, format="%.2f"
-)
+    trials            = st.number_input("Simulation trials", 1_000, 500_000, 50_000, step=5_000, key="in_trials")
+    net_worth         = st.number_input("Net worth (USD)", 0.0, value=1_000_000.0, step=100_000.0, format="%.0f", key="in_networth")
+    seed              = st.number_input("Random seed", 0, value=42, step=1, key="in_seed")
+    num_customers     = st.number_input("Records / customers cap", 1, value=1_000_000, step=10_000, key="in_records_cap")
+    cost_per_customer = st.number_input("Cost per record (USD)", 1.0, value=150.0, step=10.0, format="%.2f", key="in_cpr")
+    lam               = st.number_input("Annual incident rate (lambda)", 0.0, value=0.40, step=0.05, format="%.2f", key="in_lambda")
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("Controls")
+    st.markdown("---")
+    st.subheader("Controls")
 
-# Toggle which families are on
-ctrl = ControlSet(
-    server   = st.sidebar.checkbox("Server hardening / patching", value=False),
-    media    = st.sidebar.checkbox("Media protection / encryption/DLP", value=False),
-    error    = st.sidebar.checkbox("Change control / error-proofing", value=False),
-    external = st.sidebar.checkbox("External / MFA & perimeter", value=False),
-)
-
-# Annualized costs for ROI/ROSI
-with st.sidebar.expander("Control costs (USD/yr)", expanded=False):
-    costs = ControlCosts(
-        server   = st.number_input("Server cost",   min_value=0.0, value=80_000.0, step=1_000.0, format="%.0f"),
-        media    = st.number_input("Media cost",    min_value=0.0, value=90_000.0, step=1_000.0, format="%.0f"),
-        error    = st.number_input("Error cost",    min_value=0.0, value=60_000.0, step=1_000.0, format="%.0f"),
-        external = st.number_input("External cost", min_value=0.0, value=100_000.0, step=1_000.0, format="%.0f"),
+    ctrl = ControlSet(
+        server   = st.checkbox("Server hardening / patching", value=False, key="ctl_server"),
+        media    = st.checkbox("Media protection / encryption/DLP", value=False, key="ctl_media"),
+        error    = st.checkbox("Change control / error-proofing", value=False, key="ctl_error"),
+        external = st.checkbox("External / MFA & perimeter", value=False, key="ctl_external"),
     )
 
-# Optional: show computed total for transparency
-st.sidebar.caption(
-    f"Selected controls annual cost: ${total_cost(ctrl, costs):,.0f}"
-)
+    with st.expander("Control costs (USD/yr)", expanded=False):
+        costs = ControlCosts(
+            server   = st.number_input("Server cost",   0.0, value=80_000.0,  step=1_000.0, format="%.0f", key="cost_server"),
+            media    = st.number_input("Media cost",    0.0, value=90_000.0,  step=1_000.0, format="%.0f", key="cost_media"),
+            error    = st.number_input("Error cost",    0.0, value=60_000.0,  step=1_000.0, format="%.0f", key="cost_error"),
+            external = st.number_input("External cost", 0.0, value=100_000.0, step=1_000.0, format="%.0f", key="cost_external"),
+        )
 
-# If you don’t already have this line elsewhere:
-run = st.sidebar.button("Run simulation", type="primary")
+    st.caption(f"Selected controls annual cost: ${total_cost(ctrl, costs):,.0f}")
 
-# Provide a clear run trigger if you do not already have one upstream.
-run = st.sidebar.button("Run simulation", type="primary")
+    submitted = st.form_submit_button("Run simulation", type="primary", use_container_width=True)
 
-if run:
+# ---------------------------------------------------------------------
+# Run the simulation once the form is submitted
+# ---------------------------------------------------------------------
+if submitted:
     with st.spinner("Simulating..."):
-        # -----------------------------------------------------------------
-        # Config (assumes these sidebar inputs already exist upstream)
-        # trials, net_worth, seed, num_customers, cost_per_customer, lam
-        # ctrl (ControlSet or list) and costs (ControlCosts) are also assumed.
-        # -----------------------------------------------------------------
+        # Config
         cfg = ModelConfig(
             trials=int(trials),
             net_worth=float(net_worth),
             seed=int(seed),
             record_cap=int(num_customers),
-            cost_per_record=float(cost_per_customer)
+            cost_per_record=float(cost_per_customer),
         )
 
-        # ------------------ Frequency parameters -------------------------
+        # Frequency (with optional Bayesian update)
         lam_base = float(lam)
-
         lam_draws = None
         if use_bayes and T_obs > 0:
-            lam_draws = posterior_lambda(
-                float(alpha0), float(beta0), int(k_obs), float(T_obs),
-                draws=200, seed=int(seed) + 100
-            )
-            # Use the posterior median as the point estimate for the main run
+            lam_draws = posterior_lambda(float(alpha0), float(beta0), int(k_obs), float(T_obs), draws=200, seed=int(seed)+100)
             lam_base = float(np.median(lam_draws))
 
-        fp = FreqParams(
-            lam=lam_base,
-            p_any=0.85,                 # keep or wire to your UI
-            negbin=bool(use_negbin),
-            r=float(disp_r)
-        )
+        fp = FreqParams(lam=lam_base, p_any=0.85, negbin=bool(use_negbin), r=float(disp_r))
 
-        # ------------------ Severity prior (spliced) ---------------------
-        # build_spliced_from_priors may consult cfg for exposure and $/record.
+        # Severity prior (spliced)
         sp: SplicedParams = build_spliced_from_priors(cfg)
 
-        # ------------------ Baseline simulation --------------------------
+        # Baseline
         base_losses = simulate_annual_losses(cfg, fp, sp)
         base_m = compute_metrics(base_losses, cfg.net_worth)
 
-        # ------------------ Controlled simulation ------------------------
-        ce = control_effects(ctrl)  # ctrl: your chosen control set from UI
+        # Controlled
+        ce = control_effects(ctrl)
         ctrl_losses = simulate_annual_losses(cfg, fp, sp, ce)
         ctrl_m = compute_metrics(ctrl_losses, cfg.net_worth)
 
-        # ------------------ ROI ------------------------------------------
-        ctrl_cost = total_cost(ctrl, costs)  # costs: ControlCosts mapping
+        # ROI
+        ctrl_cost = total_cost(ctrl, costs)
         delta_eal = base_m["EAL"] - ctrl_m["EAL"]
         rosi = ((delta_eal - ctrl_cost) / ctrl_cost * 100.0) if ctrl_cost > 0 else np.nan
 
-        # ------------------ KPI tiles ------------------------------------
+        # KPI tiles
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("EAL (Baseline)",   f"${base_m['EAL']:,.0f}")
         c2.metric("EAL (Controlled)", f"${ctrl_m['EAL']:,.0f}", delta=f"-${delta_eal:,.0f}")
-        c3.metric("VaR95 (Base->Ctrl)", f"${base_m['VaR95']:,.0f}",
-                  delta=f"-${(base_m['VaR95'] - ctrl_m['VaR95']):,.0f}")
-        c4.metric("VaR99 (Base->Ctrl)", f"${base_m['VaR99']:,.0f}",
-                  delta=f"-${(base_m['VaR99'] - ctrl_m['VaR99']):,.0f}")
+        c3.metric("VaR95 (Base→Ctrl)", f"${base_m['VaR95']:,.0f}", delta=f"-${(base_m['VaR95']-ctrl_m['VaR95']):,.0f}")
+        c4.metric("VaR99 (Base→Ctrl)", f"${base_m['VaR99']:,.0f}", delta=f"-${(base_m['VaR99']-ctrl_m['VaR99']):,.0f}")
 
         d1, d2, d3 = st.columns(3)
         d1.metric("VaR95 / Net Worth (Base)", f"{base_m['VaR95_to_NetWorth']*100:,.2f}%")
@@ -145,15 +117,13 @@ if run:
 
         st.markdown("---")
 
-        # ------------------ LEC curves (with optional credible bands) ----
+        # LEC (with optional credible bands)
         lec_b = lec(base_losses, n=200).assign(scenario="Baseline")
         lec_c = lec(ctrl_losses, n=200).assign(scenario="Controlled")
 
         fig = go.Figure()
-        fig.add_scatter(x=lec_b["loss"], y=lec_b["exceed_prob"],
-                        mode="lines", name="Baseline")
-        fig.add_scatter(x=lec_c["loss"], y=lec_c["exceed_prob"],
-                        mode="lines", name="Controlled")
+        fig.add_scatter(x=lec_b["loss"], y=lec_b["exceed_prob"], mode="lines", name="Baseline")
+        fig.add_scatter(x=lec_c["loss"], y=lec_c["exceed_prob"], mode="lines", name="Controlled")
 
         if use_bayes and T_obs > 0 and lam_draws is not None:
             S = min(80, len(lam_draws))
@@ -161,41 +131,34 @@ if run:
             # Baseline bands
             samples = []
             for i in range(S):
-                fp_i = FreqParams(lam=float(lam_draws[i]),
-                                  p_any=fp.p_any, negbin=fp.negbin, r=fp.r)
+                fp_i = FreqParams(lam=float(lam_draws[i]), p_any=fp.p_any, negbin=fp.negbin, r=fp.r)
                 samples.append(simulate_annual_losses(cfg, fp_i, sp))
             samples = np.stack(samples, axis=0)
             band_b = lec_bands(samples, n=200, level=0.90)
-            fig.add_scatter(x=band_b["loss"], y=band_b["hi"], mode="lines",
-                            name="Baseline 90% hi", line=dict(width=0.5), showlegend=False)
-            fig.add_scatter(x=band_b["loss"], y=band_b["lo"], mode="lines",
-                            name="Baseline 90% lo", line=dict(width=0.5),
-                            fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
+            fig.add_scatter(x=band_b["loss"], y=band_b["hi"], mode="lines", name="Baseline 90% hi",
+                            line=dict(width=0.5), showlegend=False)
+            fig.add_scatter(x=band_b["loss"], y=band_b["lo"], mode="lines", name="Baseline 90% lo",
+                            line=dict(width=0.5), fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
 
             # Controlled bands
             samples_c = []
             for i in range(S):
-                fp_i = FreqParams(lam=float(lam_draws[i]),
-                                  p_any=fp.p_any, negbin=fp.negbin, r=fp.r)
+                fp_i = FreqParams(lam=float(lam_draws[i]), p_any=fp.p_any, negbin=fp.negbin, r=fp.r)
                 samples_c.append(simulate_annual_losses(cfg, fp_i, sp, ce))
             samples_c = np.stack(samples_c, axis=0)
             band_c = lec_bands(samples_c, n=200, level=0.90)
-            fig.add_scatter(x=band_c["loss"], y=band_c["hi"], mode="lines",
-                            name="Controlled 90% hi", line=dict(width=0.5), showlegend=False)
-            fig.add_scatter(x=band_c["loss"], y=band_c["lo"], mode="lines",
-                            name="Controlled 90% lo", line=dict(width=0.5),
-                            fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
+            fig.add_scatter(x=band_c["loss"], y=band_c["hi"], mode="lines", name="Controlled 90% hi",
+                            line=dict(width=0.5), showlegend=False)
+            fig.add_scatter(x=band_c["loss"], y=band_c["lo"], mode="lines", name="Controlled 90% lo",
+                            line=dict(width=0.5), fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
 
-        fig.update_layout(
-            title="Loss Exceedance Curve (LEC) with Optional Credible Bands",
-            xaxis_title="Annual Loss (USD)",
-            yaxis_title="P(Loss >= x)"
-        )
+        fig.update_layout(title="Loss Exceedance Curve (LEC) with Optional Credible Bands",
+                          xaxis_title="Annual Loss (USD)", yaxis_title="P(Loss >= x)")
         fig.update_xaxes(type="log")
         fig.update_yaxes(type="log", range=[-2.5, 0])
         st.plotly_chart(fig, use_container_width=True)
 
-        # ------------------ Summary table --------------------------------
+        # Summary table
         st.subheader("Summary")
         summary_df = pd.DataFrame({
             "Metric": ["EAL", "VaR95", "VaR99", "VaR95/NetWorth", "VaR99/NetWorth",
@@ -207,20 +170,9 @@ if run:
                           ctrl_m["VaR95_to_NetWorth"], ctrl_m["VaR99_to_NetWorth"],
                           ctrl_cost, delta_eal, rosi],
         })
-        st.dataframe(
-            summary_df.style.format({"Baseline": "{:,.2f}", "Controlled": "{:,.2f}"}),
-            use_container_width=True
-        )
+        st.dataframe(summary_df.style.format({"Baseline": "{:,.2f}", "Controlled": "{:,.2f}"}), use_container_width=True)
 
-        # ------------------ Download (CSV) -------------------------------
+        # Download CSV of annual losses
         buf = io.StringIO()
-        pd.DataFrame({
-            "annual_loss_baseline": base_losses,
-            "annual_loss_controlled": ctrl_losses
-        }).to_csv(buf, index=False)
-        st.download_button(
-            label="Download annual losses (CSV)",
-            data=buf.getvalue(),
-            file_name="cyber_annual_losses.csv",
-            mime="text/csv"
-        )
+        pd.DataFrame({"annual_loss_baseline": base_losses, "annual_loss_controlled": ctrl_losses}).to_csv(buf, index=False)
+        st.download_button("Download annual losses (CSV)", buf.getvalue(), "cyber_annual_losses.csv", "text/csv")
