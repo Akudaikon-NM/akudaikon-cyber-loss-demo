@@ -42,3 +42,6 @@ Cost per record (USD)	Severity scalar per impacted record	Replace with empirical
 Controls	Likelihood / severity multipliers	Replace placeholder multipliers with calibrated deltas
 Control costs (USD/yr)	Annualized cost per control	Enables ROI and marginal ROI analysis
 Random seed	Reproducibility	Fix to repeat charts/exports
+python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+streamlit run app.py
