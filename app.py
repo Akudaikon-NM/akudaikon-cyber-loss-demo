@@ -422,22 +422,26 @@ if submitted:
         base_losses = simulate_annual_losses(cfg, fp, sp)
         base_m = compute_metrics(base_losses, cfg.net_worth)
 
-        # Controlled (data-driven effects from shares; fallback to static mapping if shares empty)
-ash = st.session_state.get("_action_shares", DEFAULT_ACTION_SHARES)
-psh = st.session_state.get("_pattern_shares", DEFAULT_PATTERN_SHARES)
+                # ---------------- Controlled (data-driven effects) ----------------
+        # Pull the latest shares chosen/uploaded in the sidebar
+        ash = st.session_state.get("_action_shares", DEFAULT_ACTION_SHARES)
+        psh = st.session_state.get("_pattern_shares", DEFAULT_PATTERN_SHARES)
 
-try:
-    ce = effects_from_shares(ctrl, ash, psh)
-except Exception:
-    # Safe fallback to your existing static mapping
-    ce = control_effects(ctrl)
+        # Map controls -> parameter multipliers using the shares
+        try:
+            ce = effects_from_shares(ctrl, ash, psh)
+        except Exception:
+            # Safe fallback to static control mapping
+            ce = control_effects(ctrl)
 
+        # Run the controlled simulation and metrics
+        ctrl_losses = simulate_annual_losses(cfg, fp, sp, ce)
+        ctrl_m = compute_metrics(ctrl_losses, cfg.net_worth)
 
-
-        # ----- ROI ------------------------------------------------------------
-ctrl_cost = total_cost(ctrl, costs)
-delta_eal = base_m["EAL"] - ctrl_m["EAL"]
-rosi = ((delta_eal - ctrl_cost) / ctrl_cost * 100.0) if ctrl_cost > 0 else float("nan")
+        # ----------------------------- ROI --------------------------------
+        ctrl_cost = total_cost(ctrl, costs)
+        delta_eal = base_m["EAL"] - ctrl_m["EAL"]
+        rosi = ((delta_eal - ctrl_cost) / ctrl_cost * 100.0) if ctrl_cost > 0 else np.nan
 
 
        # ----- KPI tiles ------------------------------------------------------
