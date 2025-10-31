@@ -28,28 +28,150 @@ with st.sidebar.expander("Advanced frequency", expanded=False):
     use_negbin  = st.checkbox("Use Negative Binomial (overdispersion)", value=False, key="adv_use_negbin")
     disp_r      = st.number_input("NegBin dispersion r", 0.5, 10.0, 1.5, step=0.1, key="adv_disp_r")
 # -----------------------------------------------
-# Finance NAICS presets (applied via session_state)
+# NAICS 52 (Finance & Insurance) presets
 # -----------------------------------------------
+# NOTES:
+# - λ (lambda) ~ mean incidents/year (starter priors)
+# - records_cap ~ max exposed records (scale by customer base / policyholders)
+# - cost_per_record ~ dollars per exposed record (raise for HIPAA/PHI-heavy lines)
+# - net_worth ~ rough balance-sheet proxy to enable VaR/Net-Worth ratios
+# Tune to your institution/portfolio; these are placeholders for demos.
 NAICS_FINANCE_PRESETS = {
+    # 521 — Monetary Authorities–Central Bank
+    "521110 — Monetary Authorities (Central Bank)": {
+        "lambda": 0.35, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 5_000_000_000.0,
+    },
+
+    # 522 — Credit Intermediation & Related Activities
     "522110 — Commercial Banking": {
-        "lambda": 0.60,          # mean incidents / yr
-        "records_cap": 5_000_000,
-        "cost_per_record": 185.0,
-        "net_worth": 2_000_000_000.0,
+        "lambda": 0.60, "records_cap": 5_000_000, "cost_per_record": 185.0, "net_worth": 2_000_000_000.0,
+    },
+    "522120 — Savings Institutions": {
+        "lambda": 0.45, "records_cap": 1_500_000, "cost_per_record": 185.0, "net_worth": 800_000_000.0,
     },
     "522130 — Credit Unions": {
-        "lambda": 0.35,
-        "records_cap": 250_000,
-        "cost_per_record": 185.0,
-        "net_worth": 100_000_000.0,
+        "lambda": 0.35, "records_cap": 250_000, "cost_per_record": 185.0, "net_worth": 100_000_000.0,
     },
     "522190 — Other Depository Credit Intermediation": {
-        "lambda": 0.45,
-        "records_cap": 1_000_000,
-        "cost_per_record": 185.0,
-        "net_worth": 500_000_000.0,
+        "lambda": 0.45, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 500_000_000.0,
+    },
+
+    # 5222 — Nondepository Credit Intermediation
+    "522210 — Credit Card Issuing": {
+        "lambda": 0.55, "records_cap": 3_000_000, "cost_per_record": 185.0, "net_worth": 1_000_000_000.0,
+    },
+    "522220 — Sales Financing": {
+        "lambda": 0.40, "records_cap": 1_000_000, "cost_per_record": 175.0, "net_worth": 400_000_000.0,
+    },
+    "522291 — Consumer Lending": {
+        "lambda": 0.45, "records_cap": 1_500_000, "cost_per_record": 185.0, "net_worth": 600_000_000.0,
+    },
+    "522292 — Real Estate Credit (incl. Mortgage Lending)": {
+        "lambda": 0.40, "records_cap": 2_000_000, "cost_per_record": 185.0, "net_worth": 800_000_000.0,
+    },
+    "522293 — International Trade Financing": {
+        "lambda": 0.35, "records_cap": 500_000, "cost_per_record": 175.0, "net_worth": 700_000_000.0,
+    },
+    "522294 — Secondary Market Financing": {
+        "lambda": 0.35, "records_cap": 3_000_000, "cost_per_record": 175.0, "net_worth": 1_500_000_000.0,
+    },
+    "522298 — All Other Nondepository Credit Intermediation": {
+        "lambda": 0.35, "records_cap": 800_000, "cost_per_record": 175.0, "net_worth": 300_000_000.0,
+    },
+
+    # 5223 — Activities Related to Credit Intermediation
+    "522310 — Mortgage & Nonmortgage Loan Brokers": {
+        "lambda": 0.30, "records_cap": 600_000, "cost_per_record": 175.0, "net_worth": 150_000_000.0,
+    },
+    "522320 — Financial Transactions Processing / Reserve / Clearinghouse": {
+        "lambda": 0.65, "records_cap": 8_000_000, "cost_per_record": 200.0, "net_worth": 1_500_000_000.0,
+    },
+    "522390 — Other Activities Related to Credit Intermediation": {
+        "lambda": 0.30, "records_cap": 500_000, "cost_per_record": 175.0, "net_worth": 200_000_000.0,
+    },
+
+    # 523 — Securities, Commodity Contracts & Other Financial Investments
+    "523110 — Investment Banking & Securities Dealing": {
+        "lambda": 0.45, "records_cap": 1_500_000, "cost_per_record": 185.0, "net_worth": 2_000_000_000.0,
+    },
+    "523120 — Securities Brokerage": {
+        "lambda": 0.45, "records_cap": 2_500_000, "cost_per_record": 185.0, "net_worth": 1_200_000_000.0,
+    },
+    "523130 — Commodity Contracts Dealing": {
+        "lambda": 0.35, "records_cap": 500_000, "cost_per_record": 175.0, "net_worth": 500_000_000.0,
+    },
+    "523140 — Commodity Contracts Brokerage": {
+        "lambda": 0.35, "records_cap": 800_000, "cost_per_record": 175.0, "net_worth": 600_000_000.0,
+    },
+    "523210 — Securities & Commodity Exchanges": {
+        "lambda": 0.40, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 2_500_000_000.0,
+    },
+    "523910 — Miscellaneous Intermediation": {
+        "lambda": 0.35, "records_cap": 600_000, "cost_per_record": 175.0, "net_worth": 250_000_000.0,
+    },
+    "523920 — Portfolio Management": {
+        "lambda": 0.35, "records_cap": 1_200_000, "cost_per_record": 175.0, "net_worth": 900_000_000.0,
+    },
+    "523930 — Investment Advice": {
+        "lambda": 0.30, "records_cap": 400_000, "cost_per_record": 175.0, "net_worth": 150_000_000.0,
+    },
+    "523991 — Trust, Fiduciary & Custody Activities": {
+        "lambda": 0.35, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 700_000_000.0,
+    },
+    "523999 — Miscellaneous Financial Investment Activities": {
+        "lambda": 0.30, "records_cap": 500_000, "cost_per_record": 175.0, "net_worth": 200_000_000.0,
+    },
+
+    # 524 — Insurance Carriers & Related Activities
+    "524113 — Direct Life Insurance Carriers": {
+        "lambda": 0.50, "records_cap": 3_000_000, "cost_per_record": 210.0, "net_worth": 1_500_000_000.0,
+    },
+    "524114 — Direct Health & Medical Insurance Carriers": {
+        "lambda": 0.55, "records_cap": 4_000_000, "cost_per_record": 250.0, "net_worth": 1_800_000_000.0,
+    },
+    "524126 — Direct Property & Casualty Insurance Carriers": {
+        "lambda": 0.45, "records_cap": 2_000_000, "cost_per_record": 200.0, "net_worth": 1_500_000_000.0,
+    },
+    "524127 — Direct Title Insurance Carriers": {
+        "lambda": 0.35, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 600_000_000.0,
+    },
+    "524128 — Other Direct Insurance Carriers": {
+        "lambda": 0.40, "records_cap": 1_500_000, "cost_per_record": 200.0, "net_worth": 900_000_000.0,
+    },
+    "524210 — Insurance Agencies & Brokerages": {
+        "lambda": 0.30, "records_cap": 600_000, "cost_per_record": 185.0, "net_worth": 150_000_000.0,
+    },
+    "524291 — Claims Adjusting": {
+        "lambda": 0.30, "records_cap": 500_000, "cost_per_record": 185.0, "net_worth": 120_000_000.0,
+    },
+    "524292 — Third-Party Administration of Insurance & Pension Funds": {
+        "lambda": 0.40, "records_cap": 1_500_000, "cost_per_record": 200.0, "net_worth": 400_000_000.0,
+    },
+    "524298 — All Other Insurance Related Activities": {
+        "lambda": 0.30, "records_cap": 500_000, "cost_per_record": 185.0, "net_worth": 120_000_000.0,
+    },
+
+    # 525 — Funds, Trusts & Other Financial Vehicles
+    "525110 — Pension Funds": {
+        "lambda": 0.35, "records_cap": 2_000_000, "cost_per_record": 200.0, "net_worth": 2_000_000_000.0,
+    },
+    "525120 — Health & Welfare Funds": {
+        "lambda": 0.40, "records_cap": 2_500_000, "cost_per_record": 230.0, "net_worth": 1_200_000_000.0,
+    },
+    "525190 — Other Insurance Funds": {
+        "lambda": 0.35, "records_cap": 1_500_000, "cost_per_record": 210.0, "net_worth": 900_000_000.0,
+    },
+    "525910 — Open-End Investment Funds": {
+        "lambda": 0.35, "records_cap": 1_500_000, "cost_per_record": 175.0, "net_worth": 1_500_000_000.0,
+    },
+    "525920 — Trusts, Estates & Agency Accounts": {
+        "lambda": 0.30, "records_cap": 800_000, "cost_per_record": 185.0, "net_worth": 700_000_000.0,
+    },
+    "525990 — Other Financial Vehicles": {
+        "lambda": 0.30, "records_cap": 1_000_000, "cost_per_record": 175.0, "net_worth": 1_000_000_000.0,
     },
 }
+
 
 with st.sidebar.expander("Finance NAICS presets", expanded=False):
     use_naics = st.checkbox("Use preset", value=False, key="naics_enable")
