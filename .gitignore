@@ -1,4 +1,42 @@
-.venv/
+# --- Python / build artifacts ---
 __pycache__/
 *.pyc
-.streamlit/
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# --- Virtual envs ---
+.venv/
+venv/
+.env/
+.env*/        # e.g., .env.local
+
+# --- Notebooks (optional) ---
+.ipynb_checkpoints/
+
+# --- OS noise ---
+.DS_Store
+Thumbs.db
+
+# --- IDE / project files (optional) ---
+.vscode/
+.idea/
+
+# --- Streamlit ---
+.streamlit/secrets.toml   # keep secrets out of git
+# allow config to be committed if you use one:
+# .streamlit/config.toml  (DO NOT ignore this if you want to ship defaults)
+
+# --- Data / cache (adjust as you like) ---
+data/
+*.csv
+*.parquet
+*.xlsx
+*.json
+
+# Streamlit caches
+.streamlit/cache/
+.streamlit/artifacts/
+
