@@ -1,42 +1,48 @@
-akudaikon-cyber-loss-demo
+Akudaikon Cyber-Loss Demo
+Quantitative Monte Carlo Model for Cyber Risk and Control ROI
 
-Minimal Streamlit demo: Monte Carlo cyber-loss model with control toggles, EAL/VaR, and a Loss Exceedance Curve (LEC).
-Defaults are synthetic placeholders; swap in your trained propensity and severity models when ready.
+This Streamlit app demonstrates a Monte Carlo cyber-loss simulation that estimates Expected Annual Loss (EAL), Value at Risk (VaR), and visualizes the Loss Exceedance Curve (LEC).
+It is designed to help organizations treat cybersecurity as a capital allocation problem—quantifying how each control reduces risk and justifying spend in CFO-native terms.
 
-Goal: Treat security like capital allocation. Each control has a cost and reduces expected loss (ΔEAL) and tail risk (ΔVaR). Rank, bundle, and justify spend in CFO-native terms.
+🎯 Goal
 
-Features
+Model breach frequency and severity using probabilistic methods, simulate potential annual losses, and evaluate the Return on Security Investment (ROSI) for individual or bundled controls.
+Each control has:
 
-Monte Carlo engine (frequency ~ Poisson(λ); heavy-tailed severity proxy)
+A defined annual cost
 
-Controls: Server, Media, Error, External (multipliers + annual costs)
+Likelihood and/or severity multipliers
 
-Metrics: EAL, VaR95/99, VaR/Net-Worth ratio
+A measurable impact on ΔEAL and ΔVaR
 
-Charts: Loss Exceedance Curve (log-log)
+⚙️ How It Works
+Component	Description	Notes
+Frequency	Incidents per year modeled as Poisson(λ)	λ = mean annual event rate
+Severity	(Beta fraction of customers) × (cost per record), capped by exposure	Replace with your trained severity model
+Controls	Apply likelihood and/or severity multipliers (plus optional annual cost)	Simulate “what-if” security investments
+Outputs	EAL, VaR95/99, LEC (log–log chart), ROI tables, CSV export	Compare baseline vs controlled scenarios
+📊 Features
 
-Exports: CSV of simulated losses (baseline & controlled)
+Monte Carlo engine — frequency ~ Poisson(λ); severity ~ heavy-tailed proxy
 
-ROI: Per-control isolated ROI and marginal ROI (adding to current bundle)
+Controls — Server, Media, Error, External; user-defined multipliers and costs
 
-⚙️ How it works (short)
+Metrics — EAL, VaR95/99, and VaR-to-Net-Worth ratio
 
-Frequency: Incidents ~ Poisson(λ)
+Charts — Loss Exceedance Curve (log–log tail risk view)
 
-Severity (demo): (Beta fraction of customers) × ($/customer), capped by customers
+Exports — Download CSV of baseline & controlled simulations
 
-Controls: Apply likelihood/severity multipliers (and optional annual cost)
+ROI analysis — Per-control and marginal ROI when added to a bundle
 
-Outputs: EAL, VaR95/99, LEC, ROI tables, CSV export
-
-Inputs (left panel)
-Field	What it means	Tips
-NAICS sector	Seeds starter priors (breach propensity, records per breach)	Replace with your sector priors / model hooks
-Simulation trials	Number of Monte Carlo runs	10k is good for demos; more = smoother tails
-Customers / records (cap)	Exposure at risk, used as cap for records exposed	Pull from 5300 Call Report or internal system of record
-Net Worth ($)	Used for VaR / Net Worth ratios	Useful for board & regulator reporting
-Annual incident rate λ	Mean incidents per year	Use IRP metrics or industry baselines
-Cost per customer ($)	Severity scalar per impacted record	Replace with your empirically derived cost model
-Controls	Apply multipliers for Server / Media / Error / External	Replace placeholder multipliers with calibrated Δpropensity / Δseverity
-Control costs ($/yr)	Annualized cost per control	Enables ROI and marginal ROI analysis
-Random seed	Reproducibility of results	Fix to repeat charts/exports
+🧩 Inputs (Sidebar)
+Field	What It Means	Tips
+NAICS sector	Seeds baseline breach probability and records per breach	Replace with sector priors or trained model hooks
+Simulation trials	Number of Monte Carlo runs	10k for demos; more = smoother tails
+Customers / records cap	Exposure limit for records affected	Source from NCUA 5300 or internal data
+Net Worth ($)	Used to compute VaR / Net Worth ratios	Aligns with board & regulator reporting
+Annual incident rate (λ)	Average incidents per year	Derived from IRP metrics or benchmarks
+Cost per customer ($)	Average cost per impacted record	Replace with empirically derived estimates
+Controls	Likelihood / severity multipliers	Use calibrated Δpropensity and Δseverity values
+Control costs ($/yr)	Annualized cost per control	Enables ROI and portfolio optimization
+Random seed	Ensures reproducibility	Fix for consistent charts and exports
