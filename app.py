@@ -15,6 +15,116 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 st.title("Akudaikon | Cyber-Loss Demo")
 st.caption("Monte Carlo loss model with control ROI and optional Bayesian frequency.")
+# ---------- Data-driven control effects (actions & patterns) ----------
+from typing import Mapping, Optional
+
+def _normalize_shares(raw: Mapping[str, float]) -> dict:
+    """Ensure shares sum to 1.0 and strip empties; robust to floats/strings."""
+    pairs = [(k.strip(), float(v)) for k, v in (raw or {}).items() if k and v is not None]
+    total = sum(max(0.0, v) for _, v in pairs)
+    if total <= 0:
+        return {}
+    return {k: (max(0.0, v) / total) for k, v in pairs if v > 0}
+
+# Built-in NAICS 52 (Finance/Insurance) demo shares (replace with your VCDB slice)
+DEFAULT_ACTION_SHARES = _normalize_shares({
+    "Error": 0.35, "Hacking": 0.25, "Misuse": 0.25, "Social": 0.10, "Physical": 0.05
+})
+DEFAULT_PATTERN_SHARES = _normalize_shares({
+    "Privilege Misuse": 0.40, "Basic Web App Attacks": 0.30, "Misc Errors": 0.30
+})
+
+# How each control influences frequency (λ, p_any) per ACTION share
+# Numbers are fractional reductions applied *proportionally to that action's share*
+ACTION_IMPACT_BY_CONTROL = {
+    "external": {  # MFA/perimeter: cut external vectors (hacking/social)
+        "Hacking": 0.30, "Social": 0.25
+    },
+    "error": {     # Change control: cut error-caused incidents
+        "Error": 0.25
+    },
+    "server": {    # Patching/hardening: cut infra-driven compromises
+        "Hacking": 0.15, "Misuse": 0.05
+    },
+    "media": {     # Media protection has little effect on frequency (mostly tail)
+        # keep empty or tiny effects if desired
+    },
+}
+
+# How each control influences TAIL severity scale per PATTERN share (GPD scale)
+PATTERN_TAIL_IMPACT_BY_CONTROL = {
+    "media": {  # encryption/DLP, better handling => bend the tail
+        "Misc Errors": 0.35, "Privilege Misuse": 0.15
+    },
+    "server": {  # safer servers slightly reduce extreme loss potential
+        "Basic Web App Attacks": 0.10
+    },
+    "external": {},  # primarily frequency
+    "error":   {},   # primarily frequency
+}
+
+def effects_from_shares(
+    ctrl: "ControlSet",
+    action_shares: Optional[Mapping[str, float]] = None,
+    pattern_shares: Optional[Mapping[str, float]] = None,
+    min_lam_mult: float = 0.50,
+    min_pany_mult: float = 0.50,
+    min_gpd_scale_mult: float = 0.50,
+) -> "ControlEffects":
+    """
+    Blend toggled controls with action/pattern shares into multipliers:
+      - lam_mult, p_any_mult: down-weighted by ACTION shares for active controls
+      - gpd_scale_mult: tail scale down-weighted by PATTERN shares for active controls
+    Clamped so multipliers never drop below the provided minima.
+    """
+    from engine import ControlEffects  # local import to avoid circulars in some setups
+
+    a_sh = _normalize_shares(action_shares or DEFAULT_ACTION_SHARES)
+    p_sh = _normalize_shares(pattern_shares or DEFAULT_PATTERN_SHARES)
+
+    lam_mult = 1.0
+    p_any_mult = 1.0
+    gpd_scale_mult = 1.0
+
+    def apply_action(control_key: str):
+        nonlocal lam_mult, p_any_mult
+        impact = ACTION_IMPACT_BY_CONTROL.get(control_key, {})
+        if not impact:
+            return
+        # Each action reduces λ and p_any proportionally to its share and control strength
+        for act, strength in impact.items():
+            share = a_sh.get(act, 0.0)
+            # Blend multiplicatively: (1 - share*strength)
+            factor = max(0.0, 1.0 - share * strength)
+            lam_mult *= factor
+            p_any_mult *= factor
+
+    def apply_pattern(control_key: str):
+        nonlocal gpd_scale_mult
+        impact = PATTERN_TAIL_IMPACT_BY_CONTROL.get(control_key, {})
+        if not impact:
+            return
+        for patt, strength in impact.items():
+            share = p_sh.get(patt, 0.0)
+            factor = max(0.0, 1.0 - share * strength)
+            gpd_scale_mult *= factor
+
+    # Apply in any order; effects compound multiplicatively
+    if getattr(ctrl, "external", False):
+        apply_action("external"); apply_pattern("external")
+    if getattr(ctrl, "error", False):
+        apply_action("error");    apply_pattern("error")
+    if getattr(ctrl, "server", False):
+        apply_action("server");   apply_pattern("server")
+    if getattr(ctrl, "media", False):
+        apply_action("media");    apply_pattern("media")
+
+    # Clamp so we never overshrink unrealistically
+    lam_mult = max(min_lam_mult, lam_mult)
+    p_any_mult = max(min_pany_mult, p_any_mult)
+    gpd_scale_mult = max(min_gpd_scale_mult, gpd_scale_mult)
+
+    return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_scale_mult)
 
 # ---------------------------------------------------------------------
 # Advanced frequency (outside the form so it doesn't reset on submit)
@@ -193,6 +303,57 @@ with st.sidebar.expander("Finance NAICS presets", expanded=False):
         st.session_state["in_cpr"]         = p["cost_per_record"]
         st.session_state["in_networth"]    = p["net_worth"]
         st.caption(f"Preset applied: {choice}")
+# -----------------------------------------------
+# Data-driven control effects: shares source
+# -----------------------------------------------
+with st.sidebar.expander("Data-driven control effects (shares)", expanded=False):
+    st.caption("Use NAICS-52 demo shares or upload CSVs to weight control effects by ACTION/PATTERN.")
+    shares_mode = st.radio(
+        "Shares source",
+        ["Built-in NAICS-52 (demo)", "Upload CSVs"],
+        index=0,
+        key="shares_mode"
+    )
+
+    action_shares = DEFAULT_ACTION_SHARES
+    pattern_shares = DEFAULT_PATTERN_SHARES
+
+    if shares_mode == "Upload CSVs":
+        up_actions = st.file_uploader("Upload action shares CSV (columns: category, share)", type=["csv"], key="up_actions")
+        up_patterns = st.file_uploader("Upload pattern shares CSV (columns: category, share)", type=["csv"], key="up_patterns")
+
+        def _read_shares(file) -> dict:
+            try:
+                df_u = pd.read_csv(file)
+                # support common column names
+                cat_col = next((c for c in df_u.columns if c.lower() in ["category", "action", "pattern", "name"]), None)
+                share_col = next((c for c in df_u.columns if "share" in c.lower() or "weight" in c.lower()), None)
+                if not cat_col or not share_col:
+                    st.warning("CSV must have columns like [category, share]. Using defaults.")
+                    return {}
+                return _normalize_shares(dict(zip(df_u[cat_col], df_u[share_col])))
+            except Exception as e:
+                st.warning(f"Could not parse shares CSV: {e}. Using defaults.")
+                return {}
+
+        if up_actions is not None:
+            tmp = _read_shares(up_actions)
+            if tmp: action_shares = tmp
+        if up_patterns is not None:
+            tmp = _read_shares(up_patterns)
+            if tmp: pattern_shares = tmp
+
+    # Small preview
+    if action_shares:
+        st.write("**Action shares**")
+        st.dataframe(pd.DataFrame({"action": list(action_shares.keys()), "share": list(action_shares.values())}))
+    if pattern_shares:
+        st.write("**Pattern shares**")
+        st.dataframe(pd.DataFrame({"pattern": list(pattern_shares.keys()), "share": list(pattern_shares.values())}))
+
+# store in session so the run block can see them
+st.session_state["_action_shares"] = action_shares
+st.session_state["_pattern_shares"] = pattern_shares
 
 # ---------------------------------------------------------------------
 # Scenario + Controls (grouped in ONE form)
@@ -261,8 +422,16 @@ if submitted:
         base_losses = simulate_annual_losses(cfg, fp, sp)
         base_m = compute_metrics(base_losses, cfg.net_worth)
 
-        # Controlled
-        ce = control_effects(ctrl)
+        # Controlled (data-driven effects from shares; fallback to static mapping if shares empty)
+ash = st.session_state.get("_action_shares", DEFAULT_ACTION_SHARES)
+psh = st.session_state.get("_pattern_shares", DEFAULT_PATTERN_SHARES)
+
+try:
+    ce = effects_from_shares(ctrl, ash, psh)
+except Exception:
+    # Safe fallback to your existing static mapping
+    ce = control_effects(ctrl)
+
         ctrl_losses = simulate_annual_losses(cfg, fp, sp, ce)
         ctrl_m = compute_metrics(ctrl_losses, cfg.net_worth)
 
