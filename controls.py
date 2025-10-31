@@ -1,3 +1,4 @@
+# controls.py
 from dataclasses import dataclass
 
 @dataclass
@@ -9,31 +10,47 @@ class ControlSet:
 
 @dataclass
 class ControlCosts:
-    server: float = 50000.0
-    media: float = 30000.0
-    error: float = 40000.0
-    external: float = 100000.0
+    server: float = 0.0
+    media: float = 0.0
+    error: float = 0.0
+    external: float = 0.0
 
 def prob_multiplier(ctrl: ControlSet) -> float:
-    m = 1.0
-    if ctrl.server:   m *= 0.85
-    if ctrl.media:    m *= 0.95
-    if ctrl.error:    m *= 0.85
-    if ctrl.external: m *= 0.70
-    return m
+    """
+    Backward-compatible: flatten to a single λ multiplier.
+    """
+    mult = 1.0
+    if ctrl.external: mult *= 0.75   # MFA/external surface
+    if ctrl.server:   mult *= 0.85   # patching/hardening
+    if ctrl.error:    mult *= 0.90   # change control
+    # media primarily affects *severity tail*; leave prob here
+    return mult
 
 def severity_multiplier(ctrl: ControlSet) -> float:
-    m = 1.0
-    if ctrl.server:   m *= 0.95
-    if ctrl.media:    m *= 0.90
-    if ctrl.error:    m *= 0.90
-    if ctrl.external: m *= 0.95
-    return m
+    """
+    Backward-compatible: flatten to scalar severity multiplier.
+    """
+    mult = 1.0
+    if ctrl.media:    mult *= 0.80   # encryption/DLP bends tail
+    return mult
+
+# New: causal effects used by spliced model
+from engine import ControlEffects
+def control_effects(ctrl: ControlSet) -> ControlEffects:
+    lam_mult = prob_multiplier(ctrl)
+    # P(any) moves with external and error (less phish/misconfig seasons)
+    p_any_mult = 1.0
+    if ctrl.external: p_any_mult *= 0.85
+    if ctrl.error:    p_any_mult *= 0.95
+    # Tail severity scale responds to media
+    gpd_scale_mult = 1.0
+    if ctrl.media:    gpd_scale_mult *= 0.70
+    return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_scale_mult)
 
 def total_cost(ctrl: ControlSet, costs: ControlCosts) -> float:
-    c = 0.0
-    if ctrl.server:   c += costs.server
-    if ctrl.media:    c += costs.media
-    if ctrl.error:    c += costs.error
-    if ctrl.external: c += costs.external
-    return c
+    tot = 0.0
+    if ctrl.server:   tot += costs.server
+    if ctrl.media:    tot += costs.media
+    if ctrl.error:    tot += costs.error
+    if ctrl.external: tot += costs.external
+    return tot
