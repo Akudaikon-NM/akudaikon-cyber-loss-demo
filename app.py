@@ -21,28 +21,35 @@ st.caption("Monte Carlo loss model with control ROI and optional Bayesian freque
 # ---------------------------------------------------------------------
 with st.sidebar.expander("Advanced frequency", expanded=False):
     use_bayes   = st.checkbox("Bayesian lambda (Gamma prior + your data)", value=False, key="adv_use_bayes")
-    alpha0      = st.number_input("lambda prior alpha", 0.01, 50.0, 2.0, step=0.1, key="adv_alpha0")
-    beta0       = st.number_input("lambda prior beta",  0.01, 50.0, 8.0, step=0.1, key="adv_beta0")
-    k_obs       = st.number_input("Incidents observed", 0, 100, 0, step=1, key="adv_k_obs")
-    T_obs       = st.number_input("Observation years",  0.0, 50.0, 0.0, step=0.5, key="adv_T_obs")
+    alpha0      = st.number_input("lambda prior alpha", min_value=0.01, max_value=50.0, value=2.0, step=0.1, key="adv_alpha0")
+    beta0       = st.number_input("lambda prior beta",  min_value=0.01, max_value=50.0, value=8.0, step=0.1, key="adv_beta0")
+    k_obs       = st.number_input("Incidents observed (k)", min_value=0, max_value=100000, value=0, step=1, key="adv_k_obs")
+    T_obs       = st.number_input("Observation years (T)",  min_value=0.0, max_value=200.0, value=0.0, step=0.5, key="adv_T_obs")
     use_negbin  = st.checkbox("Use Negative Binomial (overdispersion)", value=False, key="adv_use_negbin")
-    disp_r      = st.number_input("NegBin dispersion r", 0.5, 10.0, 1.5, step=0.1, key="adv_disp_r")
+    disp_r      = st.number_input("NegBin dispersion r", min_value=0.5, max_value=10.0, value=1.5, step=0.1, key="adv_disp_r")
+
+    # --- Calibration helper (k,T → λ̂ ; optional prior seeding) ---
+    st.markdown("**Calibration (from dataset slice)**")
+    if T_obs and T_obs > 0:
+        lam_hat = float(k_obs) / float(T_obs)
+        st.caption(f"λ̂ (k/T) = {lam_hat:.4f} incidents/year")
+        with st.popover("Seed prior from λ̂"):
+            w = st.number_input("Pseudo-years (weight for prior)", min_value=0.1, max_value=50.0, value=2.0, step=0.1, key="adv_pseudo_w")
+            if st.button("Apply prior α₀=λ̂·w, β₀=w", key="btn_seed_prior"):
+                st.session_state["adv_alpha0"] = lam_hat * w
+                st.session_state["adv_beta0"]  = w
+                st.session_state["adv_use_bayes"] = True
+                st.success("Prior seeded from λ̂.")
+    else:
+        st.caption("Provide k and T to compute λ̂ (and optionally seed a weak prior).")
+
 # -----------------------------------------------
 # NAICS 52 (Finance & Insurance) presets
 # -----------------------------------------------
-# NOTES:
-# - λ (lambda) ~ mean incidents/year (starter priors)
-# - records_cap ~ max exposed records (scale by customer base / policyholders)
-# - cost_per_record ~ dollars per exposed record (raise for HIPAA/PHI-heavy lines)
-# - net_worth ~ rough balance-sheet proxy to enable VaR/Net-Worth ratios
-# Tune to your institution/portfolio; these are placeholders for demos.
 NAICS_FINANCE_PRESETS = {
-    # 521 — Monetary Authorities–Central Bank
     "521110 — Monetary Authorities (Central Bank)": {
         "lambda": 0.35, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 5_000_000_000.0,
     },
-
-    # 522 — Credit Intermediation & Related Activities
     "522110 — Commercial Banking": {
         "lambda": 0.60, "records_cap": 5_000_000, "cost_per_record": 185.0, "net_worth": 2_000_000_000.0,
     },
@@ -55,8 +62,6 @@ NAICS_FINANCE_PRESETS = {
     "522190 — Other Depository Credit Intermediation": {
         "lambda": 0.45, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 500_000_000.0,
     },
-
-    # 5222 — Nondepository Credit Intermediation
     "522210 — Credit Card Issuing": {
         "lambda": 0.55, "records_cap": 3_000_000, "cost_per_record": 185.0, "net_worth": 1_000_000_000.0,
     },
@@ -78,8 +83,6 @@ NAICS_FINANCE_PRESETS = {
     "522298 — All Other Nondepository Credit Intermediation": {
         "lambda": 0.35, "records_cap": 800_000, "cost_per_record": 175.0, "net_worth": 300_000_000.0,
     },
-
-    # 5223 — Activities Related to Credit Intermediation
     "522310 — Mortgage & Nonmortgage Loan Brokers": {
         "lambda": 0.30, "records_cap": 600_000, "cost_per_record": 175.0, "net_worth": 150_000_000.0,
     },
@@ -89,8 +92,6 @@ NAICS_FINANCE_PRESETS = {
     "522390 — Other Activities Related to Credit Intermediation": {
         "lambda": 0.30, "records_cap": 500_000, "cost_per_record": 175.0, "net_worth": 200_000_000.0,
     },
-
-    # 523 — Securities, Commodity Contracts & Other Financial Investments
     "523110 — Investment Banking & Securities Dealing": {
         "lambda": 0.45, "records_cap": 1_500_000, "cost_per_record": 185.0, "net_worth": 2_000_000_000.0,
     },
@@ -121,8 +122,6 @@ NAICS_FINANCE_PRESETS = {
     "523999 — Miscellaneous Financial Investment Activities": {
         "lambda": 0.30, "records_cap": 500_000, "cost_per_record": 175.0, "net_worth": 200_000_000.0,
     },
-
-    # 524 — Insurance Carriers & Related Activities
     "524113 — Direct Life Insurance Carriers": {
         "lambda": 0.50, "records_cap": 3_000_000, "cost_per_record": 210.0, "net_worth": 1_500_000_000.0,
     },
@@ -150,8 +149,6 @@ NAICS_FINANCE_PRESETS = {
     "524298 — All Other Insurance Related Activities": {
         "lambda": 0.30, "records_cap": 500_000, "cost_per_record": 185.0, "net_worth": 120_000_000.0,
     },
-
-    # 525 — Funds, Trusts & Other Financial Vehicles
     "525110 — Pension Funds": {
         "lambda": 0.35, "records_cap": 2_000_000, "cost_per_record": 200.0, "net_worth": 2_000_000_000.0,
     },
@@ -172,20 +169,25 @@ NAICS_FINANCE_PRESETS = {
     },
 }
 
-
 with st.sidebar.expander("Finance NAICS presets", expanded=False):
     use_naics = st.checkbox("Use preset", value=False, key="naics_enable")
+
+    # ensure Credit Unions is the actual default, regardless of dict order
+    _keys = list(NAICS_FINANCE_PRESETS.keys())
+    _default_label = "522130 — Credit Unions"
+    _default_index = _keys.index(_default_label) if _default_label in _keys else 0
+
     choice = st.selectbox(
         "Select NAICS (Finance)",
-        list(NAICS_FINANCE_PRESETS.keys()),
-        index=1,  # defaults to Credit Unions
+        _keys,
+        index=_default_index,
         disabled=not use_naics,
         key="naics_choice",
     )
 
     if use_naics:
         p = NAICS_FINANCE_PRESETS[choice]
-        # Seed form inputs via session_state so the form shows these values
+        # Seed scenario inputs via session_state so the form reflects the preset
         st.session_state["in_lambda"]      = p["lambda"]
         st.session_state["in_records_cap"] = p["records_cap"]
         st.session_state["in_cpr"]         = p["cost_per_record"]
@@ -198,12 +200,12 @@ with st.sidebar.expander("Finance NAICS presets", expanded=False):
 with st.sidebar.form("scenario_form"):
     st.header("Scenario")
 
-    trials            = st.number_input("Simulation trials", 1_000, 500_000, 50_000, step=5_000, key="in_trials")
-    net_worth         = st.number_input("Net worth (USD)", 0.0, value=1_000_000.0, step=100_000.0, format="%.0f", key="in_networth")
-    seed              = st.number_input("Random seed", 0, value=42, step=1, key="in_seed")
-    num_customers     = st.number_input("Records / customers cap", 1, value=1_000_000, step=10_000, key="in_records_cap")
-    cost_per_customer = st.number_input("Cost per record (USD)", 1.0, value=150.0, step=10.0, format="%.2f", key="in_cpr")
-    lam               = st.number_input("Annual incident rate (lambda)", 0.0, value=0.40, step=0.05, format="%.2f", key="in_lambda")
+    trials            = st.number_input("Simulation trials", min_value=1_000, max_value=500_000, value=50_000, step=5_000, key="in_trials")
+    net_worth         = st.number_input("Net worth (USD)", min_value=0.0, value=1_000_000.0, step=100_000.0, format="%.0f", key="in_networth")
+    seed              = st.number_input("Random seed", min_value=0, value=42, step=1, key="in_seed")
+    num_customers     = st.number_input("Records / customers cap", min_value=1, value=1_000_000, step=10_000, key="in_records_cap")
+    cost_per_customer = st.number_input("Cost per record (USD)", min_value=1.0, value=150.0, step=10.0, format="%.2f", key="in_cpr")
+    lam               = st.number_input("Annual incident rate (lambda)", min_value=0.0, value=0.40, step=0.05, format="%.2f", key="in_lambda")
 
     st.markdown("---")
     st.subheader("Controls")
@@ -217,14 +219,13 @@ with st.sidebar.form("scenario_form"):
 
     with st.expander("Control costs (USD/yr)", expanded=False):
         costs = ControlCosts(
-            server   = st.number_input("Server cost",   0.0, value=80_000.0,  step=1_000.0, format="%.0f", key="cost_server"),
-            media    = st.number_input("Media cost",    0.0, value=90_000.0,  step=1_000.0, format="%.0f", key="cost_media"),
-            error    = st.number_input("Error cost",    0.0, value=60_000.0,  step=1_000.0, format="%.0f", key="cost_error"),
-            external = st.number_input("External cost", 0.0, value=100_000.0, step=1_000.0, format="%.0f", key="cost_external"),
+            server   = st.number_input("Server cost",   min_value=0.0, value=80_000.0,  step=1_000.0, format="%.0f", key="cost_server"),
+            media    = st.number_input("Media cost",    min_value=0.0, value=90_000.0,  step=1_000.0, format="%.0f", key="cost_media"),
+            error    = st.number_input("Error cost",    min_value=0.0, value=60_000.0,  step=1_000.0, format="%.0f", key="cost_error"),
+            external = st.number_input("External cost", min_value=0.0, value=100_000.0, step=1_000.0, format="%.0f", key="cost_external"),
         )
 
     st.caption(f"Selected controls annual cost: ${total_cost(ctrl, costs):,.0f}")
-
     submitted = st.form_submit_button("Run simulation", type="primary", use_container_width=True)
 
 # ---------------------------------------------------------------------
@@ -232,7 +233,6 @@ with st.sidebar.form("scenario_form"):
 # ---------------------------------------------------------------------
 if submitted:
     with st.spinner("Simulating..."):
-        # Config
         cfg = ModelConfig(
             trials=int(trials),
             net_worth=float(net_worth),
@@ -245,7 +245,11 @@ if submitted:
         lam_base = float(lam)
         lam_draws = None
         if use_bayes and T_obs > 0:
-            lam_draws = posterior_lambda(float(alpha0), float(beta0), int(k_obs), float(T_obs), draws=200, seed=int(seed)+100)
+            lam_draws = posterior_lambda(
+                float(alpha0), float(beta0),
+                int(k_obs), float(T_obs),
+                draws=200, seed=int(seed)+100
+            )
             lam_base = float(np.median(lam_draws))
 
         fp = FreqParams(lam=lam_base, p_any=0.85, negbin=bool(use_negbin), r=float(disp_r))
