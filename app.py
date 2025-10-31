@@ -24,6 +24,55 @@ with st.sidebar.expander("Advanced frequency", expanded=False):
 
     use_negbin = st.checkbox("Use Negative Binomial (overdispersion)", value=False)
     disp_r = st.number_input("NegBin dispersion r", min_value=0.5, max_value=10.0, value=1.5, step=0.1)
+# --- Core scenario inputs (Sidebar) ---
+st.sidebar.header("Scenario")
+
+trials = st.sidebar.number_input(
+    "Simulation trials", min_value=1_000, max_value=500_000, value=50_000, step=5_000
+)
+net_worth = st.sidebar.number_input(
+    "Net worth (USD)", min_value=0.0, value=1_000_000.0, step=100_000.0, format="%.0f"
+)
+seed = st.sidebar.number_input(
+    "Random seed", min_value=0, value=42, step=1
+)
+num_customers = st.sidebar.number_input(
+    "Records / customers cap", min_value=1, value=1_000_000, step=10_000
+)
+cost_per_customer = st.sidebar.number_input(
+    "Cost per record (USD)", min_value=1.0, value=150.0, step=10.0, format="%.2f"
+)
+lam = st.sidebar.number_input(
+    "Annual incident rate (lambda)", min_value=0.0, value=0.40, step=0.05, format="%.2f"
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Controls")
+
+# Toggle which families are on
+ctrl = ControlSet(
+    server   = st.sidebar.checkbox("Server hardening / patching", value=False),
+    media    = st.sidebar.checkbox("Media protection / encryption/DLP", value=False),
+    error    = st.sidebar.checkbox("Change control / error-proofing", value=False),
+    external = st.sidebar.checkbox("External / MFA & perimeter", value=False),
+)
+
+# Annualized costs for ROI/ROSI
+with st.sidebar.expander("Control costs (USD/yr)", expanded=False):
+    costs = ControlCosts(
+        server   = st.number_input("Server cost",   min_value=0.0, value=80_000.0, step=1_000.0, format="%.0f"),
+        media    = st.number_input("Media cost",    min_value=0.0, value=90_000.0, step=1_000.0, format="%.0f"),
+        error    = st.number_input("Error cost",    min_value=0.0, value=60_000.0, step=1_000.0, format="%.0f"),
+        external = st.number_input("External cost", min_value=0.0, value=100_000.0, step=1_000.0, format="%.0f"),
+    )
+
+# Optional: show computed total for transparency
+st.sidebar.caption(
+    f"Selected controls annual cost: ${total_cost(ctrl, costs):,.0f}"
+)
+
+# If you don’t already have this line elsewhere:
+run = st.sidebar.button("Run simulation", type="primary")
 
 # Provide a clear run trigger if you do not already have one upstream.
 run = st.sidebar.button("Run simulation", type="primary")
