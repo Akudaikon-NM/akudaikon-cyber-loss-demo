@@ -443,67 +443,52 @@ if mode == "Cyber Breach (records-based)":
 # =====================================================================
 # BRANCH 2: AI INCIDENTS (monetary)
 # =====================================================================
+elif mode == "AI Incidents (monetary)":
 
-# ---- Inputs (upload OR repo fallback) ----
-if source in ("uploads", "repo"):
-    if source == "uploads":
-        enriched_csv = enriched_up
-        hai62_csv    = hai62_up
-    else:
-        enriched_csv = str(DEF_ENRICH)
-        hai62_csv    = str(DEF_HAI62)
+    st.header("AI Incidents | Monetary Risk")
+    st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
 
-    # ... load_ai_table / fit models / simulate path ...
-
-else:
+    # ---- Inputs
     c1, c2 = st.columns(2)
     enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
     hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
 
-from pathlib import Path
-DATA_DIR   = Path(__file__).resolve().parent / "data"
-DEF_ENRICH = DATA_DIR / "incidents.csv"
-DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
+    c3, c4, c5 = st.columns(3)
+    min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
+    trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
+    seed     = int(c5.number_input("Random seed", value=42, step=1))
 
-use_uploads = (enriched_up is not None and hai62_up is not None)
-use_repo    = (not use_uploads) and DEF_ENRICH.exists() and DEF_HAI62.exists()
+    # ---- Decide source: uploads → repo defaults → synthetic demo
+    from pathlib import Path
+    DATA_DIR   = Path(__file__).resolve().parent / "data"
+    DEF_ENRICH = DATA_DIR / "incidents.csv"
+    DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
 
-if use_uploads:
-    source = "uploads"
-elif use_repo:
-    source = "repo"
-else:
-    source = "demo"
-
-if source in ("uploads", "repo"):
-    if source == "uploads":
-        enriched_csv = enriched_up
-        hai62_csv    = hai62_up
+    if (enriched_up is not None and hai62_up is not None):
+        source = "uploads"
+    elif DEF_ENRICH.exists() and DEF_HAI62.exists():
+        source = "repo"
     else:
-        enriched_csv = str(DEF_ENRICH)
-        hai62_csv    = str(DEF_HAI62)
+        source = "demo"
 
-    # ... load_ai_table / fit models / simulate path ...
-
-else:
-    # ... your DEMO path (Poisson + LogNormal) ...
-
-    # ---- Helper: LEC from losses ----
+    # ---- Helper: LEC from losses (for demo & generic use)
     def _lec_dataframe(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
         lo = max(1.0, float(np.percentile(losses, 1)))
         hi = float(np.percentile(losses, 99.9))
-        if hi <= lo: hi = lo * 10.0
+        if hi <= lo:
+            hi = lo * 10.0
         xs = np.logspace(np.log10(lo), np.log10(hi), n)
         probs = [(losses >= x).mean() for x in xs]
         return pd.DataFrame({"loss": xs, "prob_exceed": probs})
 
-    # ---- Synthetic demo (fallback) ----
+    # ---- Synthetic demo generator (final fallback)
     def _simulate_ai_demo(trials: int, seed: int, lam: float = 0.45,
                           sev_mu: float = 11.5, sev_sigma: float = 1.0) -> np.ndarray:
         rng = np.random.default_rng(seed)
         k = rng.poisson(lam=lam, size=trials)
         m = int(k.max()) if trials > 0 else 0
-        if m == 0: return np.zeros(trials)
+        if m == 0:
+            return np.zeros(trials)
         sev = rng.lognormal(mean=sev_mu, sigma=sev_sigma, size=(trials, m))
         mask = np.arange(m)[None, :] < k[:, None]
         return (sev * mask).sum(axis=1)
@@ -513,8 +498,8 @@ else:
                 float(np.percentile(losses, 95)),
                 float(np.percentile(losses, 99)))
 
-    if use_uploads or use_repo:
-        # Use real pipeline with scikit-learn
+    # ---- PATH A: Uploads or repo defaults → real pipeline
+    if source in ("uploads", "repo"):
         try:
             from ai_monetary import (
                 load_ai_table, fit_severity, fit_frequency,
@@ -524,18 +509,26 @@ else:
             st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
             st.stop()
 
-        enriched_src = enriched_up if use_uploads else str(DEF_ENRICH)
-        hai62_src    = hai62_up    if use_uploads else str(DEF_HAI62)
-        st.success("Using uploaded CSVs." if use_uploads else "Loaded repo defaults: data/incidents.csv and data/joinpack_hai_6_2.csv")
+        if source == "uploads":
+            enriched_src = enriched_up
+            hai62_src    = hai62_up
+            st.success("Using uploaded CSVs.")
+        else:
+            enriched_src = str(DEF_ENRICH)
+            hai62_src    = str(DEF_HAI62)
+            st.success("Loaded repo defaults: data/incidents.csv and data/joinpack_hai_6_2.csv")
 
+        # Load & fit
         df_ai = load_ai_table(enriched_src, hai62_src)
 
         countries = ["(all)"] + (sorted(df_ai["country_group"].dropna().unique().tolist())
                                  if "country_group" in df_ai else [])
         country   = st.selectbox("Country", countries or ["(all)"])
-        domains   = st.multiselect("Domains",
-                                   ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
-                                   default=["finance"])
+        domains   = st.multiselect(
+            "Domains",
+            ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
+            default=["finance"]
+        )
         mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
 
         sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
@@ -545,20 +538,23 @@ else:
         eal, var95, var99, losses = simulate_eal_var(freq_model, sev_model, sigma, x_row,
                                                      trials=trials, seed=seed)
 
+        # KPIs
         k1, k2, k3 = st.columns(3)
         k1.metric("EAL",    f"${eal:,.0f}")
         k2.metric("VaR 95", f"${var95:,.0f}")
         k3.metric("VaR 99", f"${var99:,.0f}")
 
+        # LEC
         lec_ai = lec_dataframe(losses)
         fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve",
                       labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
         fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
         st.plotly_chart(fig, use_container_width=True)
 
+    # ---- PATH B: Nothing available → synthetic demo
     else:
-        # FINAL fallback: self-contained synthetic demo
         st.info("No CSVs found — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
+
         losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
         eal, var95, var99 = _metrics_from_losses(losses)
 
@@ -573,75 +569,9 @@ else:
         fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
         st.plotly_chart(fig, use_container_width=True)
 
-# ---- Decide source: uploads -> repo defaults -> synthetic demo ----
-from pathlib import Path
+        # Optional: let users download the demo series
+        buf = io.StringIO()
+        pd.DataFrame({"annual_loss_demo": losses}).to_csv(buf, index=False)
+        st.download_button("Download demo losses (CSV)", buf.getvalue(),
+                           "ai_demo_annual_losses.csv", "text/csv")
 
-REPO_DIR   = Path(__file__).resolve().parent
-DATA_DIR   = REPO_DIR / "data"
-DEF_ENRICH = DATA_DIR / "incidents.csv"
-DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
-
-if (enriched_up is not None and hai62_up is not None):
-    source = "uploads"
-elif DEF_ENRICH.exists() and DEF_HAI62.exists():
-    source = "repo"
-else:
-    source = "demo"
-
-if source in ("uploads", "repo"):
-    # ... your AI modeling path (unchanged) ...
-    pass
-    # =================================================================
-# PATH B: No uploads → run DEMO model (self-contained)
-# =================================================================
-else:
-    st.info("No CSVs uploaded — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
-
-    # Helpers (define here or above this whole block)
-    def _lec_dataframe(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
-        lo = max(1.0, float(np.percentile(losses, 1)))
-        hi = float(np.percentile(losses, 99.9))
-        if hi <= lo: hi = lo * 10.0
-        xs = np.logspace(np.log10(lo), np.log10(hi), n)
-        probs = [(losses >= x).mean() for x in xs]
-        return pd.DataFrame({"loss": xs, "prob_exceed": probs})
-
-    def _simulate_ai_demo(trials: int, seed: int, lam: float = 0.45,
-                          sev_mu: float = 11.5, sev_sigma: float = 1.0) -> np.ndarray:
-        rng = np.random.default_rng(seed)
-        k = rng.poisson(lam=lam, size=trials)
-        m = int(k.max()) if trials > 0 else 0
-        if m == 0: return np.zeros(trials)
-        sev = rng.lognormal(mean=sev_mu, sigma=sev_sigma, size=(trials, m))
-        mask = np.arange(m)[None, :] < k[:, None]
-        return (sev * mask).sum(axis=1)
-
-    def _metrics_from_losses(losses: np.ndarray):
-        return float(losses.mean()), float(np.percentile(losses, 95)), float(np.percentile(losses, 99))
-
-    # Base simulation
-    base_losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
-    eal, var95, var99 = _metrics_from_losses(base_losses)
-
-    # KPIs
-    k1, k2, k3 = st.columns(3)
-    k1.metric("EAL",    f"${eal:,.0f}")
-    k2.metric("VaR 95", f"${var95:,.0f}")
-    k3.metric("VaR 99", f"${var99:,.0f}")
-
-    # LEC
-    lec_ai = _lec_dataframe(base_losses)
-    fig = px.line(
-        lec_ai, x="loss", y="prob_exceed",
-        title="AI Incidents — Loss Exceedance Curve (DEMO)",
-        labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"}
-    )
-    fig.update_xaxes(type="log")
-    fig.update_yaxes(type="log", range=[-2.5, 0])
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Download
-    buf = io.StringIO()
-    pd.DataFrame({"annual_loss_demo": base_losses}).to_csv(buf, index=False)
-    st.download_button("Download demo losses (CSV)", buf.getvalue(),
-                       "ai_demo_annual_losses.csv", "text/csv")
