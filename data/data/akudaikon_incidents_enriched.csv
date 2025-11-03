@@ -1,0 +1,6 @@
+id,country_group,domain_finance,domain_healthcare,domain_transport,domain_social_media,domain_hiring_hr,domain_law_enforcement,domain_education,mod_vision,mod_nlp,mod_recommender,mod_generative,mod_autonomous,loss_usd,loss_confidence,severity_proxy,life_deployment
+1001,US,1,0,0,0,0,0,0,1,0,1,0,0,2500000,0.90,1.20,1.0
+1002,US,1,0,1,0,0,0,0,0,1,0,0,0,800000,0.75,1.10,0.8
+1003,EU,1,0,0,0,0,0,0,0,0,0,1,0,400000,0.83,1.10,0.9
+1004,Global,1,0,0,1,0,0,0,0,0,0,0,0,9500000,0.70,0.60,0.9
+1005,US,1,0,0,0,0,0,0,0,1,0,0,0,650000,0.55,0.50,0.5
