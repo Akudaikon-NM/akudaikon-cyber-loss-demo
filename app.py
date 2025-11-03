@@ -624,14 +624,59 @@ elif mode == "AI Incidents (monetary)":
             st.success("Loaded repo defaults: data/incidents.csv and data/joinpack_hai_6_2.csv")
 
         # Normalize before loading the model table
-        norm_inc, norm_hai = normalize_aiid_csvs(enriched_src, hai62_src)
+norm_inc, norm_hai = normalize_aiid_csvs(enriched_src, hai62_src)
+
+def _retry_load_with_missing_cols_added(norm_inc_path, norm_hai_path, err):
+    # Try to parse missing column names from the KeyError message
+    msg = str(err)
+    missing = []
+    # Pandas often formats like "['colA', 'colB'] not in index" or "'colA' not in index"
+    import re, ast
+    m = re.search(r"\[(.*?)\]\s+not in index", msg)
+    if m:
+        # turn " 'a','b' " into a python list
         try:
-            df_ai = load_ai_table(norm_inc, norm_hai)
-        finally:
-            # Best-effort cleanup of temp files
-            for p in (norm_inc, norm_hai):
-                try: os.unlink(p)
-                except Exception: pass
+            missing = ast.literal_eval("[" + m.group(1) + "]")
+        except Exception:
+            missing = [x.strip(" '\"") for x in m.group(1).split(",")]
+    else:
+        m = re.search(r"'([^']+)' not in index", msg)
+        if m:
+            missing = [m.group(1)]
+
+    if not missing:
+        raise err  # nothing to fix automatically
+
+    # Open, add missing cols with safe defaults, write back, and retry
+    hai_df = pd.read_csv(norm_hai_path)
+    for col in missing:
+        if col not in hai_df.columns:
+            # choose a sensible default: ints -> 0, floats -> NaN, otherwise None
+            if col.startswith(("domain_", "mod_", "fig_6_2_")):
+                hai_df[col] = 0
+            elif col in ("loss_usd", "loss_confidence", "severity_proxy", "life_deployment"):
+                hai_df[col] = np.nan
+            elif col in ("year",):
+                # if truly missing, try to copy from incidents or keep NaN
+                hai_df[col] = np.nan
+            else:
+                hai_df[col] = None
+    hai_df.to_csv(norm_hai_path, index=False)
+
+    # try again
+    return load_ai_table(norm_inc_path, norm_hai_path)
+
+try:
+    df_ai = load_ai_table(norm_inc, norm_hai)
+except KeyError as e:
+    # one automatic repair attempt
+    df_ai = _retry_load_with_missing_cols_added(norm_inc, norm_hai, e)
+finally:
+    # Best-effort cleanup of temp files (after retry path uses them)
+    for p in (norm_inc, norm_hai):
+        try: os.unlink(p)
+        except Exception: pass
+
 
         countries = ["(all)"] + (sorted(df_ai["country_group"].dropna().unique().tolist())
                                  if "country_group" in df_ai else [])
