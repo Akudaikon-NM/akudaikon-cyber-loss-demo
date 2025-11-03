@@ -20,6 +20,14 @@ import plotly.express as px
 st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 st.title("Akudaikon | Cyber-Loss Demo")
 st.caption("Monte Carlo loss model with control ROI and optional Bayesian frequency.")
+
+# --- choose which risk layer to run ---
+mode = st.sidebar.radio(
+    "Risk mode",
+    ("Cyber Breach (records-based)", "AI Incidents (monetary)"),
+    index=0
+)
+
 # ---------- Data-driven control effects (actions & patterns) ----------
 from typing import Mapping, Optional
 
