@@ -592,24 +592,70 @@ def normalize_aiid_csvs(enriched_src, hai62_src):
     return ti.name, th.name
 
     # ---- PATH A: Uploads or repo defaults → real pipeline
-    if source in ("uploads", "repo"):
-        try:
-            from ai_monetary import (
-                load_ai_table, fit_severity, fit_frequency,
-                scenario_vector, simulate_eal_var, lec_dataframe
-            )
-        except Exception:
-            st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
-            st.stop()
+if source in ("uploads", "repo"):
+    try:
+        from ai_monetary import (
+            load_ai_table, fit_severity, fit_frequency,
+            scenario_vector, simulate_eal_var, lec_dataframe
+        )
+    except Exception:
+        st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
+        st.stop()
 
-        if source == "uploads":
-            enriched_src = enriched_up
-            hai62_src    = hai62_up
-            st.success("Using uploaded CSVs.")
-        else:
-            enriched_src = str(DEF_ENRICH)
-            hai62_src    = str(DEF_HAI62)
-            st.success("Loaded repo defaults: data/incidents.csv and data/joinpack_hai_6_2.csv")
+    if source == "uploads":
+        enriched_src = enriched_up
+        hai62_src    = hai62_up
+        st.success("Using uploaded CSVs.")
+    else:
+        enriched_src = str(DEF_ENRICH)
+        hai62_src    = str(DEF_HAI62)
+        st.success("Loaded repo defaults: data/incidents.csv and data/joinpack_hai_6_2.csv")
+
+    # Normalize before loading the model table
+    norm_inc, norm_hai = normalize_aiid_csvs(enriched_src, hai62_src)
+    try:
+        df_ai = load_ai_table(norm_inc, norm_hai)
+    finally:
+        # Best-effort cleanup of temp files
+        for p in (norm_inc, norm_hai):
+            try: os.unlink(p)
+            except Exception: pass
+
+    countries = ["(all)"] + (sorted(df_ai["country_group"].dropna().unique().tolist())
+                             if "country_group" in df_ai else [])
+    country = st.selectbox("Country", countries or ["(all)"])
+    domains = st.multiselect(
+        "Domains",
+        ["finance", "healthcare", "transport", "social_media", "hiring_hr", "law_enforcement", "education"],
+        default=["finance"]
+    )
+    mods = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
+
+    sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
+    freq_model       = fit_frequency(df_ai)
+    x_row            = scenario_vector(df_ai, None if country=="(all)" else country, domains, mods)
+
+    eal, var95, var99, losses = simulate_eal_var(freq_model, sev_model, sigma, x_row,
+                                                 trials=trials, seed=seed)
+
+    # KPIs
+    k1, k2, k3 = st.columns(3)
+    k1.metric("EAL",    f"${eal:,.0f}")
+    k2.metric("VaR 95", f"${var95:,.0f}")
+    k3.metric("VaR 99", f"${var99:,.0f}")
+
+    # LEC
+    lec_ai = lec_dataframe(losses)
+    fig = px.line(lec_ai, x="loss", y="prob_exceed",
+                  title="AI Incidents — Loss Exceedance Curve",
+                  labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
+    fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
+    st.plotly_chart(fig, use_container_width=True)
+
+else:
+    # (your demo code stays as-is)
+    ...
+
 # --- Add this helper ABOVE the "Load & fit" section in PATH A ---
 def normalize_aiid_csvs(enriched_src, hai62_src):
     """
