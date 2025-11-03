@@ -461,12 +461,12 @@ else:
     hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
 
 from pathlib import Path
-    DATA_DIR   = Path(__file__).resolve().parent / "data"
-    DEF_ENRICH = DATA_DIR / "incidents.csv"
-    DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
+DATA_DIR   = Path(__file__).resolve().parent / "data"
+DEF_ENRICH = DATA_DIR / "incidents.csv"
+ DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
 
-    use_uploads = (enriched_up is not None and hai62_up is not None)
-    use_repo    = (not use_uploads) and DEF_ENRICH.exists() and DEF_HAI62.exists()
+use_uploads = (enriched_up is not None and hai62_up is not None)
+use_repo    = (not use_uploads) and DEF_ENRICH.exists() and DEF_HAI62.exists()
 
 if use_uploads:
     source = "uploads"
