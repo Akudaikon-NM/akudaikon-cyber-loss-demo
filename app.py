@@ -444,97 +444,42 @@ if mode == "Cyber Breach (records-based)":
 # BRANCH 2: AI INCIDENTS (monetary)
 # =====================================================================
 
-# Decide data source priority:
-# 1) user uploads
-# 2) repo defaults in /data
-# 3) synthetic demo
-use_uploads = (enriched_up is not None and hai62_up is not None)
-use_repo    = (not use_uploads) and DEF_ENRICH.exists() and DEF_HAI62.exists()
+elif mode == "AI Incidents (monetary)":
+    # ---- Inputs (upload OR repo defaults OR demo) ----
+    c1, c2 = st.columns(2)
+    enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
+    hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
 
-if use_uploads or use_repo:
-    # Try real model pipeline first (needs scikit-learn)
-    try:
-        from ai_monetary import (
-            load_ai_table, fit_severity, fit_frequency,
-            scenario_vector, simulate_eal_var, lec_dataframe
-        )
-    except Exception:
-        st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
-        st.stop()
+    # Repo-default paths (only used if nothing uploaded)
+    from pathlib import Path
+    REPO_DIR   = Path(__file__).resolve().parent
+    DATA_DIR   = REPO_DIR / "data"
+    DEF_ENRICH = DATA_DIR / "incidents.csv"
+    DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
 
-    if use_uploads:
-        enriched_src = enriched_up
-        hai62_src    = hai62_up
-        st.success("Using uploaded CSVs.")
+    # Decide data source *after* we have uploaders
+    use_uploads = (enriched_up is not None and hai62_up is not None)
+    use_repo    = (not use_uploads) and DEF_ENRICH.exists() and DEF_HAI62.exists()
+
+    if use_uploads or use_repo:
+        try:
+            from ai_monetary import (
+                load_ai_table, fit_severity, fit_frequency,
+                scenario_vector, simulate_eal_var, lec_dataframe
+            )
+        except Exception:
+            st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
+            st.stop()
+
+        # pick sources
+        enriched_src = enriched_up if use_uploads else str(DEF_ENRICH)
+        hai62_src    = hai62_up    if use_uploads else str(DEF_HAI62)
+        st.success("Using uploaded CSVs." if use_uploads else "Loaded repo defaults: incidents.csv, joinpack_hai_6_2.csv")
+
+        # ... (rest of your AI pipeline: load_ai_table → fit → simulate → plots/ROI)
     else:
-        enriched_src = str(DEF_ENRICH)   # pass as path
-        hai62_src    = str(DEF_HAI62)
-        st.success(f"Loaded repo defaults: {DEF_ENRICH.name}, {DEF_HAI62.name}")
+        # ... (synthetic demo fallback)
 
-    # Load & fit
-    df_ai = load_ai_table(enriched_src, hai62_src)
-
-    countries = ["(all)"] + (
-        sorted(df_ai["country_group"].dropna().unique().tolist())
-        if "country_group" in df_ai else []
-    )
-    country   = st.selectbox("Country", countries or ["(all)"])
-    domains   = st.multiselect(
-        "Domains",
-        ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
-        default=["finance"]
-    )
-    mods      = st.multiselect(
-        "Modalities",
-        ["vision","nlp","recommender","generative","autonomous"],
-        default=[]
-    )
-
-    sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
-    freq_model       = fit_frequency(df_ai)
-    x_row            = scenario_vector(df_ai, None if country=="(all)" else country, domains, mods)
-
-    eal, var95, var99, losses = simulate_eal_var(
-        freq_model, sev_model, sigma, x_row, trials=trials, seed=seed
-    )
-
-    k1, k2, k3 = st.columns(3)
-    k1.metric("EAL",    f"${eal:,.0f}")
-    k2.metric("VaR 95", f"${var95:,.0f}")
-    k3.metric("VaR 99", f"${var99:,.0f}")
-
-    lec_ai = lec_dataframe(losses)
-    fig = px.line(lec_ai, x="loss", y="prob_exceed",
-                  title="AI Incidents — Loss Exceedance Curve",
-                  labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
-    fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("#### Control ROI (illustrative)")
-    st.caption("Swap these with real levers (e.g., policy compliance, deployment gating, model risk controls).")
-
-    def _ctl_policy_momentum(x):
-        for c in [c for c in x.columns if c.startswith("fig_6_2_")]:
-            x[c] = x[c] * 1.10
-        return x
-
-    def _ctl_deployment_gate(x):
-        if "severity_proxy" in x.columns: x["severity_proxy"] = x["severity_proxy"] * 0.85
-        if "life_deployment" in x.columns: x["life_deployment"] = x["life_deployment"] * 0.90
-        return x
-
-    def _roi_row(fn, label, cost, trials=5000):
-        x2 = fn(x_row.copy())
-        eal2, _, _, _ = simulate_eal_var(freq_model, sev_model, sigma, x2, trials=trials, seed=seed)
-        dEAL = eal - eal2
-        rosi = (dEAL - cost) / cost if cost > 0 else np.nan
-        return dict(control=label, EAL_base=eal, EAL_with=eal2, dEAL=dEAL, cost=cost, ROSI=rosi)
-
-    roi_df = pd.DataFrame([
-        _roi_row(_ctl_policy_momentum, "Policy momentum (+10% AI policy)", 150_000),
-        _roi_row(_ctl_deployment_gate, "Deployment gating (-15% severity proxy)", 250_000),
-    ]).sort_values("dEAL", ascending=False)
-    st.dataframe(roi_df, use_container_width=True)
 
 else:
     # === Synthetic demo fallback ===
