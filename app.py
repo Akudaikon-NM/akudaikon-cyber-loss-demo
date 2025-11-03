@@ -554,38 +554,75 @@ elif mode == "AI Incidents (monetary)":
         fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
         st.plotly_chart(fig, use_container_width=True)
 
+# ---- Decide source: uploads -> repo defaults -> synthetic demo ----
+from pathlib import Path
 
+REPO_DIR   = Path(__file__).resolve().parent
+DATA_DIR   = REPO_DIR / "data"
+DEF_ENRICH = DATA_DIR / "incidents.csv"
+DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
+
+if (enriched_up is not None and hai62_up is not None):
+    source = "uploads"
+elif DEF_ENRICH.exists() and DEF_HAI62.exists():
+    source = "repo"
+else:
+    source = "demo"
+
+if source in ("uploads", "repo"):
+    # ... your AI modeling path (unchanged) ...
+    pass
     # =================================================================
-    # PATH B: No uploads → run DEMO model (self-contained)
-    # =================================================================
-        # =================================================================
-    # PATH B: No uploads → run DEMO model (self-contained)
-    # =================================================================
-    else:
-        st.info("No CSVs uploaded — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
+# PATH B: No uploads → run DEMO model (self-contained)
+# =================================================================
+else:
+    st.info("No CSVs uploaded — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
 
-        # Base simulation
-        base_losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
-        eal, var95, var99 = _metrics_from_losses(base_losses)
+    # Helpers (define here or above this whole block)
+    def _lec_dataframe(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
+        lo = max(1.0, float(np.percentile(losses, 1)))
+        hi = float(np.percentile(losses, 99.9))
+        if hi <= lo: hi = lo * 10.0
+        xs = np.logspace(np.log10(lo), np.log10(hi), n)
+        probs = [(losses >= x).mean() for x in xs]
+        return pd.DataFrame({"loss": xs, "prob_exceed": probs})
 
-        # KPIs
-        k1, k2, k3 = st.columns(3)
-        k1.metric("EAL",    f"${eal:,.0f}")
-        k2.metric("VaR 95", f"${var95:,.0f}")
-        k3.metric("VaR 99", f"${var99:,.0f}")
+    def _simulate_ai_demo(trials: int, seed: int, lam: float = 0.45,
+                          sev_mu: float = 11.5, sev_sigma: float = 1.0) -> np.ndarray:
+        rng = np.random.default_rng(seed)
+        k = rng.poisson(lam=lam, size=trials)
+        m = int(k.max()) if trials > 0 else 0
+        if m == 0: return np.zeros(trials)
+        sev = rng.lognormal(mean=sev_mu, sigma=sev_sigma, size=(trials, m))
+        mask = np.arange(m)[None, :] < k[:, None]
+        return (sev * mask).sum(axis=1)
 
-        # LEC
-        lec_ai = _lec_dataframe(base_losses)
-        fig = px.line(
-            lec_ai, x="loss", y="prob_exceed",
-            title="AI Incidents — Loss Exceedance Curve (DEMO)",
-            labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"}
-        )
-        fig.update_xaxes(type="log")
-        fig.update_yaxes(type="log", range=[-2.5, 0])
-        st.plotly_chart(fig, use_container_width=True)
+    def _metrics_from_losses(losses: np.ndarray):
+        return float(losses.mean()), float(np.percentile(losses, 95)), float(np.percentile(losses, 99))
 
-        # Download
-        buf = io.StringIO()
-        pd.DataFrame({"annual_loss_demo": base_losses}).to_csv(buf, index=False)
-        st.download_button("Download demo losses (CSV)", buf.getvalue(), "ai_demo_annual_losses.csv", "text/csv")
+    # Base simulation
+    base_losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
+    eal, var95, var99 = _metrics_from_losses(base_losses)
+
+    # KPIs
+    k1, k2, k3 = st.columns(3)
+    k1.metric("EAL",    f"${eal:,.0f}")
+    k2.metric("VaR 95", f"${var95:,.0f}")
+    k3.metric("VaR 99", f"${var99:,.0f}")
+
+    # LEC
+    lec_ai = _lec_dataframe(base_losses)
+    fig = px.line(
+        lec_ai, x="loss", y="prob_exceed",
+        title="AI Incidents — Loss Exceedance Curve (DEMO)",
+        labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"}
+    )
+    fig.update_xaxes(type="log")
+    fig.update_yaxes(type="log", range=[-2.5, 0])
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Download
+    buf = io.StringIO()
+    pd.DataFrame({"annual_loss_demo": base_losses}).to_csv(buf, index=False)
+    st.download_button("Download demo losses (CSV)", buf.getvalue(),
+                       "ai_demo_annual_losses.csv", "text/csv")
