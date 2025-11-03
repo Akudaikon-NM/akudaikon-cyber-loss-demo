@@ -238,6 +238,12 @@ with st.sidebar.expander("Data-driven control effects (shares)", expanded=False)
     if shares_mode == "Upload CSVs":
         up_actions = st.file_uploader("Upload action shares CSV (columns: category, share)", type=["csv"], key="up_actions")
         up_patterns = st.file_uploader("Upload pattern shares CSV (columns: category, share)", type=["csv"], key="up_patterns")
+enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
+hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
+
+# OWASP-style validation
+_validate_upload(enriched_up, "Enriched incidents CSV")
+_validate_upload(hai62_up, "HAI 6.2 join-pack CSV")
 
         def _read_shares(file) -> dict:
             try:
