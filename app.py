@@ -456,8 +456,6 @@ if source in ("uploads", "repo"):
     # ... load_ai_table / fit models / simulate path ...
 
 else:
-    # ... your DEMO path (Poisson + LogNormal) ...
-
 c1, c2 = st.columns(2)
 enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
 hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
