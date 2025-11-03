@@ -444,30 +444,51 @@ if mode == "Cyber Breach (records-based)":
 # BRANCH 2: AI INCIDENTS (monetary)
 # =====================================================================
 
-elif mode == "AI Incidents (monetary)":
+# ---- Inputs (upload OR repo fallback) ----
+if source in ("uploads", "repo"):
+    if source == "uploads":
+        enriched_csv = enriched_up
+        hai62_csv    = hai62_up
+    else:
+        enriched_csv = str(DEF_ENRICH)
+        hai62_csv    = str(DEF_HAI62)
 
-    st.header("AI Incidents | Monetary Risk")
-    st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
+    # ... load_ai_table / fit models / simulate path ...
 
-    # ---- Inputs (upload OR repo defaults OR demo) ----
-    c1, c2 = st.columns(2)
-    enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
-    hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
+else:
+    # ... your DEMO path (Poisson + LogNormal) ...
 
-    c3, c4, c5 = st.columns(3)
-    min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
-    trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
-    seed     = int(c5.number_input("Random seed", value=42, step=1))
+c1, c2 = st.columns(2)
+enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
+hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
 
-    # Repo defaults if nothing uploaded
-    from pathlib import Path
-    REPO_DIR   = Path(__file__).resolve().parent
-    DATA_DIR   = REPO_DIR / "data"
-    DEF_ENRICH = DATA_DIR / "incidents.csv"
-    DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
+from pathlib import Path
+DATA_DIR   = Path(__file__).resolve().parent / "data"
+DEF_ENRICH = DATA_DIR / "incidents.csv"
+DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
 
-    use_uploads = (enriched_up is not None and hai62_up is not None)
-    use_repo    = (not use_uploads) and DEF_ENRICH.exists() and DEF_HAI62.exists()
+use_uploads = (enriched_up is not None and hai62_up is not None)
+use_repo    = (not use_uploads) and DEF_ENRICH.exists() and DEF_HAI62.exists()
+
+if use_uploads:
+    source = "uploads"
+elif use_repo:
+    source = "repo"
+else:
+    source = "demo"
+
+if source in ("uploads", "repo"):
+    if source == "uploads":
+        enriched_csv = enriched_up
+        hai62_csv    = hai62_up
+    else:
+        enriched_csv = str(DEF_ENRICH)
+        hai62_csv    = str(DEF_HAI62)
+
+    # ... load_ai_table / fit models / simulate path ...
+
+else:
+    # ... your DEMO path (Poisson + LogNormal) ...
 
     # ---- Helper: LEC from losses ----
     def _lec_dataframe(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
