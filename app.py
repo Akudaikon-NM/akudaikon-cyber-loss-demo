@@ -497,6 +497,70 @@ if submitted:
             negbin=bool(use_negbin),
             r=float(disp_r)
         )
+else:
+    st.header("AI Incidents | Monetary Risk")
+    st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
+
+    c1, c2 = st.columns(2)
+    enriched_csv = c1.text_input("Enriched incidents CSV", "/mnt/data/akudaikon_incidents_enriched.csv")
+    hai62_csv    = c2.text_input("HAI 6.2 join-pack CSV", "/mnt/data/akudaikon_joinpack_hai_6_2.csv")
+
+    c3, c4, c5 = st.columns(3)
+    min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
+    trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
+    seed     = int(c5.number_input("Random seed", value=42, step=1))
+
+    df_ai = load_ai_table(enriched_csv, hai62_csv)
+
+    countries = ["(all)"] + sorted(df_ai["country_group"].dropna().unique().tolist()) if "country_group" in df_ai else ["(all)"]
+    country   = st.selectbox("Country", countries)
+    domains   = st.multiselect("Domains", ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"], default=["finance"])
+    mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
+
+    sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
+    freq_model       = fit_frequency(df_ai)
+    x_row            = scenario_vector(df_ai, None if country=="(all)" else country, domains, mods)
+
+    eal, var95, var99, losses = simulate_eal_var(freq_model, sev_model, sigma, x_row, trials=trials, seed=seed)
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric("EAL",    f"${eal:,.0f}")
+    k2.metric("VaR 95", f"${var95:,.0f}")
+    k3.metric("VaR 99", f"${var99:,.0f}")
+
+    # LEC (log-log like your cyber view)
+    lec_ai = lec_dataframe(losses)
+    fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve",
+                  labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
+    fig.update_xaxes(type="log")
+    fig.update_yaxes(type="log", range=[-2.5, 0])
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### Control ROI (illustrative)")
+    st.caption("Swap these with real levers (e.g., policy compliance, deployment gating, model risk controls).")
+
+    import numpy as np, pandas as pd
+    def _ctl_policy_momentum(x):
+        for c in [c for c in x.columns if c.startswith("fig_6_2_")]:
+            x[c] = x[c] * 1.10  # assume higher policy activity → lower exposure
+        return x
+    def _ctl_deployment_gate(x):
+        if "severity_proxy" in x.columns: x["severity_proxy"] = x["severity_proxy"] * 0.85
+        if "life_deployment" in x.columns: x["life_deployment"] = x["life_deployment"] * 0.90
+        return x
+
+    def _roi_row(fn, label, cost, trials=5000):
+        x2 = fn(x_row.copy())
+        eal2, _, _, _ = simulate_eal_var(freq_model, sev_model, sigma, x2, trials=trials, seed=seed)
+        dEAL = eal - eal2
+        rosi = (dEAL - cost) / cost if cost>0 else np.nan
+        return dict(control=label, EAL_base=eal, EAL_with=eal2, dEAL=dEAL, cost=cost, ROSI=rosi)
+
+    roi_df = pd.DataFrame([
+        _roi_row(_ctl_policy_momentum, "Policy momentum (+10% AI policy)", 150_000),
+        _roi_row(_ctl_deployment_gate, "Deployment gating (-15% severity proxy)", 250_000),
+    ]).sort_values("dEAL", ascending=False)
+    st.dataframe(roi_df, use_container_width=True)
 
         # ---------------- Severity prior (spliced) ----------------
         sp: SplicedParams = build_spliced_from_priors(cfg)
