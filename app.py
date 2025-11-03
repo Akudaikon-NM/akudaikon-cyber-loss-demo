@@ -445,23 +445,57 @@ if mode == "Cyber Breach (records-based)":
 # =====================================================================
 
 elif mode == "AI Incidents (monetary)":
+
+    st.header("AI Incidents | Monetary Risk")
+    st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
+
     # ---- Inputs (upload OR repo defaults OR demo) ----
     c1, c2 = st.columns(2)
     enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
     hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
 
-    # Repo-default paths (only used if nothing uploaded)
+    c3, c4, c5 = st.columns(3)
+    min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
+    trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
+    seed     = int(c5.number_input("Random seed", value=42, step=1))
+
+    # Repo defaults if nothing uploaded
     from pathlib import Path
     REPO_DIR   = Path(__file__).resolve().parent
     DATA_DIR   = REPO_DIR / "data"
     DEF_ENRICH = DATA_DIR / "incidents.csv"
     DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
 
-    # Decide data source *after* we have uploaders
     use_uploads = (enriched_up is not None and hai62_up is not None)
     use_repo    = (not use_uploads) and DEF_ENRICH.exists() and DEF_HAI62.exists()
 
+    # ---- Helper: LEC from losses ----
+    def _lec_dataframe(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
+        lo = max(1.0, float(np.percentile(losses, 1)))
+        hi = float(np.percentile(losses, 99.9))
+        if hi <= lo: hi = lo * 10.0
+        xs = np.logspace(np.log10(lo), np.log10(hi), n)
+        probs = [(losses >= x).mean() for x in xs]
+        return pd.DataFrame({"loss": xs, "prob_exceed": probs})
+
+    # ---- Synthetic demo (fallback) ----
+    def _simulate_ai_demo(trials: int, seed: int, lam: float = 0.45,
+                          sev_mu: float = 11.5, sev_sigma: float = 1.0) -> np.ndarray:
+        rng = np.random.default_rng(seed)
+        k = rng.poisson(lam=lam, size=trials)
+        m = int(k.max()) if trials > 0 else 0
+        if m == 0: return np.zeros(trials)
+        sev = rng.lognormal(mean=sev_mu, sigma=sev_sigma, size=(trials, m))
+        mask = np.arange(m)[None, :] < k[:, None]
+        return (sev * mask).sum(axis=1)
+
+    def _metrics_from_losses(losses: np.ndarray) -> tuple[float, float, float]:
+        return (float(losses.mean()),
+                float(np.percentile(losses, 95)),
+                float(np.percentile(losses, 99)))
+
     if use_uploads or use_repo:
+        # Use real pipeline with scikit-learn
         try:
             from ai_monetary import (
                 load_ai_table, fit_severity, fit_frequency,
@@ -471,62 +505,18 @@ elif mode == "AI Incidents (monetary)":
             st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
             st.stop()
 
-        # pick sources
         enriched_src = enriched_up if use_uploads else str(DEF_ENRICH)
         hai62_src    = hai62_up    if use_uploads else str(DEF_HAI62)
-        st.success("Using uploaded CSVs." if use_uploads else "Loaded repo defaults: incidents.csv, joinpack_hai_6_2.csv")
+        st.success("Using uploaded CSVs." if use_uploads else "Loaded repo defaults: data/incidents.csv and data/joinpack_hai_6_2.csv")
 
-        # ... (rest of your AI pipeline: load_ai_table → fit → simulate → plots/ROI)
-    else:
-        # ... (synthetic demo fallback)
+        df_ai = load_ai_table(enriched_src, hai62_src)
 
-
-else:
-    # === Synthetic demo fallback ===
-    st.info("No CSVs found — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
-
-    base_losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
-    eal  = float(base_losses.mean())
-    var95 = float(np.percentile(base_losses, 95))
-    var99 = float(np.percentile(base_losses, 99))
-
-    k1, k2, k3 = st.columns(3)
-    k1.metric("EAL",    f"${eal:,.0f}")
-    k2.metric("VaR 95", f"${var95:,.0f}")
-    k3.metric("VaR 99", f"${var99:,.0f}")
-
-    lec_ai = _lec_dataframe(base_losses)
-    fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve (DEMO)",
-                  labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
-    fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
-    st.plotly_chart(fig, use_container_width=True)
-
-
-    # =================================================================
-    # PATH A: CSVs provided → use your ai_monetary models
-    # =================================================================
-    if enriched_up and hai62_up:
-        try:
-            from ai_monetary import (
-                load_ai_table, fit_severity, fit_frequency,
-                scenario_vector, simulate_eal_var, lec_dataframe
-            )
-        except Exception:
-            st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
-            st.stop()
-
-        df_ai = load_ai_table(enriched_up, hai62_up)
-
-        countries = ["(all)"] + (
-            sorted(df_ai["country_group"].dropna().unique().tolist())
-            if "country_group" in df_ai else []
-        )
+        countries = ["(all)"] + (sorted(df_ai["country_group"].dropna().unique().tolist())
+                                 if "country_group" in df_ai else [])
         country   = st.selectbox("Country", countries or ["(all)"])
-        domains   = st.multiselect(
-            "Domains",
-            ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
-            default=["finance"]
-        )
+        domains   = st.multiselect("Domains",
+                                   ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
+                                   default=["finance"])
         mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
 
         sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
@@ -547,31 +537,23 @@ else:
         fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("#### Control ROI (illustrative)")
-        st.caption("Swap these with real levers (e.g., policy compliance, deployment gating, model risk controls).")
+    else:
+        # FINAL fallback: self-contained synthetic demo
+        st.info("No CSVs found — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
+        losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
+        eal, var95, var99 = _metrics_from_losses(losses)
 
-        def _ctl_policy_momentum(x):
-            for c in [c for c in x.columns if c.startswith("fig_6_2_")]:
-                x[c] = x[c] * 1.10
-            return x
+        k1, k2, k3 = st.columns(3)
+        k1.metric("EAL",    f"${eal:,.0f}")
+        k2.metric("VaR 95", f"${var95:,.0f}")
+        k3.metric("VaR 99", f"${var99:,.0f}")
 
-        def _ctl_deployment_gate(x):
-            if "severity_proxy" in x.columns: x["severity_proxy"] = x["severity_proxy"] * 0.85
-            if "life_deployment" in x.columns: x["life_deployment"] = x["life_deployment"] * 0.90
-            return x
+        lec_ai = _lec_dataframe(losses)
+        fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve (DEMO)",
+                      labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
+        fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
+        st.plotly_chart(fig, use_container_width=True)
 
-        def _roi_row(fn, label, cost, trials=5000):
-            x2 = fn(x_row.copy())
-            eal2, _, _, _ = simulate_eal_var(freq_model, sev_model, sigma, x2, trials=trials, seed=seed)
-            dEAL = eal - eal2
-            rosi = (dEAL - cost) / cost if cost > 0 else np.nan
-            return dict(control=label, EAL_base=eal, EAL_with=eal2, dEAL=dEAL, cost=cost, ROSI=rosi)
-
-        roi_df = pd.DataFrame([
-            _roi_row(_ctl_policy_momentum, "Policy momentum (+10% AI policy)", 150_000),
-            _roi_row(_ctl_deployment_gate, "Deployment gating (-15% severity proxy)", 250_000),
-        ]).sort_values("dEAL", ascending=False)
-        st.dataframe(roi_df, use_container_width=True)
 
     # =================================================================
     # PATH B: No uploads → run DEMO model (self-contained)
