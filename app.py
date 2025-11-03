@@ -443,98 +443,137 @@ if mode == "Cyber Breach (records-based)":
 # =====================================================================
 # BRANCH 2: AI INCIDENTS (monetary)
 # =====================================================================
+# =====================================================================
+# BRANCH 2: AI INCIDENTS (monetary)
+# =====================================================================
 elif mode == "AI Incidents (monetary)":
-    # Lazy import so Cyber mode doesn’t require scikit-learn
-    try:
-        from ai_monetary import (
-            load_ai_table, fit_severity, fit_frequency,
-            scenario_vector, simulate_eal_var, lec_dataframe
-        )
-    except Exception:
-        st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
-        st.stop()
 
     st.header("AI Incidents | Monetary Risk")
     st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
 
-    # ⬇️ Use uploads instead of fixed paths
+    # ---- Inputs (upload OR demo) ----
     c1, c2 = st.columns(2)
-    enriched_up = c1.file_uploader(
-        "Enriched incidents CSV (required)", type=["csv"], accept_multiple_files=False
-    )
-    hai62_up = c2.file_uploader(
-        "HAI 6.2 join-pack CSV (required)", type=["csv"], accept_multiple_files=False
-    )
-
-    # Guard until both files are present
-    if not enriched_up or not hai62_up:
-        st.info("Upload both CSV files to run this analysis (or switch to *Cyber Breach* mode).")
-        st.stop()
+    enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
+    hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
 
     c3, c4, c5 = st.columns(3)
     min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
     trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
     seed     = int(c5.number_input("Random seed", value=42, step=1))
 
-    # Pandas can read UploadedFile objects directly
-    try:
+    # ---- Helper: LEC from losses (no external deps) ----
+    def _lec_dataframe(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
+        # avoid zeros in log-scale
+        lo = max(1.0, float(np.percentile(losses, 1)))
+        hi = float(np.percentile(losses, 99.9))
+        if hi <= lo:
+            hi = lo * 10.0
+        xs = np.logspace(np.log10(lo), np.log10(hi), n)
+        probs = [(losses >= x).mean() for x in xs]
+        return pd.DataFrame({"loss": xs, "prob_exceed": probs})
+
+    # ---- Demo simulator (when files are missing) ----
+    def _simulate_ai_demo(trials: int, seed: int, lam: float = 0.45,
+                          sev_mu: float = 11.5, sev_sigma: float = 1.0) -> np.ndarray:
+        """
+        Simple synthetic process:
+          - Frequency ~ Poisson(lam)
+          - Loss severity ~ LogNormal(mu, sigma) USD
+          - Annual loss = sum of severities per year
+        """
+        rng = np.random.default_rng(seed)
+        k = rng.poisson(lam=lam, size=trials)
+        # draw severities for each trial using vectorized trick
+        # make an array of max(k) per trial, then mask
+        m = int(k.max()) if trials > 0 else 0
+        if m == 0:
+            return np.zeros(trials)
+        sev = rng.lognormal(mean=sev_mu, sigma=sev_sigma, size=(trials, m))
+        mask = np.arange(m)[None, :] < k[:, None]
+        return (sev * mask).sum(axis=1)
+
+    def _metrics_from_losses(losses: np.ndarray) -> tuple[float, float, float]:
+        return (float(losses.mean()),
+                float(np.percentile(losses, 95)),
+                float(np.percentile(losses, 99)))
+
+    # =================================================================
+    # PATH A: CSVs provided → use your ai_monetary models
+    # =================================================================
+    if enriched_up and hai62_up:
+        try:
+            from ai_monetary import (
+                load_ai_table, fit_severity, fit_frequency,
+                scenario_vector, simulate_eal_var, lec_dataframe
+            )
+        except Exception:
+            st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
+            st.stop()
+
         df_ai = load_ai_table(enriched_up, hai62_up)
-    except Exception as e:
-        st.exception(e)
-        st.stop()
 
-    countries = ["(all)"] + (
-        sorted(df_ai["country_group"].dropna().unique().tolist())
-        if "country_group" in df_ai else []
-    )
-    country   = st.selectbox("Country", countries or ["(all)"])
-    domains   = st.multiselect(
-        "Domains",
-        ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
-        default=["finance"]
-    )
-    mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
+        countries = ["(all)"] + (
+            sorted(df_ai["country_group"].dropna().unique().tolist())
+            if "country_group" in df_ai else []
+        )
+        country   = st.selectbox("Country", countries or ["(all)"])
+        domains   = st.multiselect(
+            "Domains",
+            ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
+            default=["finance"]
+        )
+        mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
 
-    sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
-    freq_model       = fit_frequency(df_ai)
-    x_row            = scenario_vector(df_ai, None if country=="(all)" else country, domains, mods)
+        sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
+        freq_model       = fit_frequency(df_ai)
+        x_row            = scenario_vector(df_ai, None if country=="(all)" else country, domains, mods)
 
-    eal, var95, var99, losses = simulate_eal_var(freq_model, sev_model, sigma, x_row, trials=trials, seed=seed)
+        eal, var95, var99, losses = simulate_eal_var(freq_model, sev_model, sigma, x_row,
+                                                     trials=trials, seed=seed)
 
-    k1, k2, k3 = st.columns(3)
-    k1.metric("EAL",    f"${eal:,.0f}")
-    k2.metric("VaR 95", f"${var95:,.0f}")
-    k3.metric("VaR 99", f"${var99:,.0f}")
+        k1, k2, k3 = st.columns(3)
+        k1.metric("EAL",    f"${eal:,.0f}")
+        k2.metric("VaR 95", f"${var95:,.0f}")
+        k3.metric("VaR 99", f"${var99:,.0f}")
 
-    lec_ai = lec_dataframe(losses)
-    fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve",
-                  labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
-    fig.update_xaxes(type="log")
-    fig.update_yaxes(type="log", range=[-2.5, 0])
-    st.plotly_chart(fig, use_container_width=True)
+        lec_ai = lec_dataframe(losses)
+        fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve",
+                      labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
+        fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("#### Control ROI (illustrative)")
-    st.caption("Swap these with real levers (e.g., policy compliance, deployment gating, model risk controls).")
+        st.markdown("#### Control ROI (illustrative)")
+        st.caption("Swap these with real levers (e.g., policy compliance, deployment gating, model risk controls).")
 
-    def _ctl_policy_momentum(x):
-        for c in [c for c in x.columns if c.startswith("fig_6_2_")]:
-            x[c] = x[c] * 1.10
-        return x
+        def _ctl_policy_momentum(x):
+            for c in [c for c in x.columns if c.startswith("fig_6_2_")]:
+                x[c] = x[c] * 1.10
+            return x
 
-    def _ctl_deployment_gate(x):
-        if "severity_proxy" in x.columns: x["severity_proxy"] = x["severity_proxy"] * 0.85
-        if "life_deployment" in x.columns: x["life_deployment"] = x["life_deployment"] * 0.90
-        return x
+        def _ctl_deployment_gate(x):
+            if "severity_proxy" in x.columns: x["severity_proxy"] = x["severity_proxy"] * 0.85
+            if "life_deployment" in x.columns: x["life_deployment"] = x["life_deployment"] * 0.90
+            return x
 
-    def _roi_row(fn, label, cost, trials=5000):
-        x2 = fn(x_row.copy())
-        eal2, _, _, _ = simulate_eal_var(freq_model, sev_model, sigma, x2, trials=trials, seed=seed)
-        dEAL = eal - eal2
-        rosi = (dEAL - cost) / cost if cost > 0 else np.nan
-        return dict(control=label, EAL_base=eal, EAL_with=eal2, dEAL=dEAL, cost=cost, ROSI=rosi)
+        def _roi_row(fn, label, cost, trials=5000):
+            x2 = fn(x_row.copy())
+            eal2, _, _, _ = simulate_eal_var(freq_model, sev_model, sigma, x2, trials=trials, seed=seed)
+            dEAL = eal - eal2
+            rosi = (dEAL - cost) / cost if cost > 0 else np.nan
+            return dict(control=label, EAL_base=eal, EAL_with=eal2, dEAL=dEAL, cost=cost, ROSI=rosi)
 
-    roi_df = pd.DataFrame([
-        _roi_row(_ctl_policy_momentum, "Policy momentum (+10% AI policy)", 150_000),
-        _roi_row(_ctl_deployment_gate, "Deployment gating (-15% severity proxy)", 250_000),
-    ]).sort_values("dEAL", ascending=False)
-    st.dataframe(roi_df, use_container_width=True)
+        roi_df = pd.DataFrame([
+            _roi_row(_ctl_policy_momentum, "Policy momentum (+10% AI policy)", 150_000),
+            _roi_row(_ctl_deployment_gate, "Deployment gating (-15% severity proxy)", 250_000),
+        ]).sort_values("dEAL", ascending=False)
+        st.dataframe(roi_df, use_container_width=True)
+
+    # =================================================================
+    # PATH B: No uploads → run DEMO model (self-contained)
+    # =================================================================
+    else:
+        st.info("No CSVs uploaded — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
+
+        # Base simulation
+        base_losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
+        eal, var95, var99 = _metrics_from_losses(base_losses
