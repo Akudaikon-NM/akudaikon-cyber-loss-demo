@@ -11,6 +11,11 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+from ai_monetary import (
+    load_ai_table, fit_severity, fit_frequency,
+    scenario_vector, simulate_eal_var, lec_dataframe
+)
+import plotly.express as px
 
 st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 st.title("Akudaikon | Cyber-Loss Demo")
