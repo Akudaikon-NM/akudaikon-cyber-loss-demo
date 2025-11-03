@@ -24,19 +24,15 @@ st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 st.title("Akudaikon | Cyber-Loss Demo")
 st.caption("Monte Carlo loss model with control ROI and optional Bayesian frequency.")
 
-# ---------------------------------------------------------------------
-# Security & CSV utilities (OWASP-style guards)
-# ---------------------------------------------------------------------
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB cap
+# ---------- Security & CSV utilities ----------
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB
 
 def _escape_csv_injection(val):
-    """Mitigate CSV injection when opened in spreadsheets."""
     if isinstance(val, str) and val and val[0] in ("=", "+", "-", "@"):
         return "'" + val
     return val
 
 def _safe_to_csv(df: pd.DataFrame) -> str:
-    """Return CSV text with CSV-injection mitigation on object columns."""
     df_safe = df.copy()
     obj_cols = df_safe.select_dtypes(include=["object"]).columns
     if len(obj_cols):
@@ -46,43 +42,30 @@ def _safe_to_csv(df: pd.DataFrame) -> str:
     return buf.getvalue()
 
 def _validate_upload(file, label: str):
-    """Basic file checks: size & content-type."""
     if file is None:
         return
     if getattr(file, "size", 0) > MAX_UPLOAD_BYTES:
         st.error(f"{label}: file is too large (> {MAX_UPLOAD_BYTES // (1024*1024)}MB).")
         st.stop()
     ctype = getattr(file, "type", "") or getattr(file, "content_type", "")
-    if ctype and ("csv" not in ctype.lower() and "text" not in ctype.lower()):
+    if ctype and "csv" not in ctype.lower() and "text" not in ctype.lower():
         st.error(f"{label}: expected a CSV (got {ctype}).")
         st.stop()
 
-# ---------------------------------------------------------------------
-# AI join-pack normalizer (used in AI branch PATH-A)
-# ---------------------------------------------------------------------
+# ---------- Normalizer for AIID/HAI CSVs ----------
 def normalize_aiid_csvs(enriched_src, hai62_src):
-    """
-    Defensive normalizer for AIID + HAI 6.2 CSVs.
-    - Align keys: ensure 'incident_id' on HAI, add 'year' if missing (join/derive).
-    - Propagate useful features from incidents -> HAI when missing.
-    - Create stub columns for common model fields if absent.
-    - Coerce dtypes and clip ranges where appropriate.
-    Returns temp file paths: (norm_inc, norm_hai).
-    """
     inc = pd.read_csv(enriched_src)
     hai = pd.read_csv(hai62_src)
 
-    # --- 1) Keys ---
     if "incident_id" not in hai.columns and "id" in hai.columns:
         hai = hai.rename(columns={"id": "incident_id"})
 
-    # ensure 'year'
     if "year" not in hai.columns:
         year_source = None
         if {"incident_id", "year"}.issubset(inc.columns):
             year_source = inc[["incident_id", "year"]].drop_duplicates()
         else:
-            for date_col in ["published", "date", "incident_date", "event_date", "report_date"]:
+            for date_col in ["published","date","incident_date","event_date","report_date"]:
                 if date_col in inc.columns:
                     yy = pd.to_datetime(inc[date_col], errors="coerce").dt.year
                     if yy.notna().any():
@@ -92,54 +75,23 @@ def normalize_aiid_csvs(enriched_src, hai62_src):
         if year_source is not None:
             hai = hai.merge(year_source, on="incident_id", how="left")
 
-    # --- 2) Candidate features frequently expected downstream ---
-    # If missing on HAI, try to bring from incidents; otherwise create safe defaults.
-    CANDIDATES = {
-        # numerics
-        "loss_usd": np.nan,
-        "loss_confidence": np.nan,
-        "severity_proxy": np.nan,
-        "life_deployment": np.nan,
-        # categorical/grouping
-        "country_group": None,
-        # domain one-hots (extend if your join-pack uses different names)
-        "domain_finance": 0, "domain_healthcare": 0, "domain_transport": 0,
-        "domain_social_media": 0, "domain_hiring_hr": 0,
-        "domain_law_enforcement": 0, "domain_education": 0,
-        # modality one-hots
-        "mod_vision": 0, "mod_nlp": 0, "mod_recommender": 0,
-        "mod_generative": 0, "mod_autonomous": 0,
-    }
-
-    # Prefer incidents -> HAI for any missing candidates
-    join_keys = [c for c in ["incident_id", "year"] if c in hai.columns]
-    if join_keys:
-        from_inc = [c for c in CANDIDATES if c in inc.columns and c not in hai.columns]
-        if from_inc:
-            hai = hai.merge(inc[join_keys + from_inc].drop_duplicates(),
-                            on=join_keys, how="left")
-
-    # Create stubs for anything still missing
-    for col, default in CANDIDATES.items():
-        if col not in hai.columns:
-            hai[col] = default
-
-    # --- 3) Dtypes & cleaning ---
     for c in ["loss_usd", "loss_confidence", "severity_proxy", "life_deployment"]:
         if c in hai.columns:
             hai[c] = pd.to_numeric(hai[c], errors="coerce")
-    # binary dummies
-    for c in [c for c in hai.columns if c.startswith(("domain_", "mod_", "fig_6_2_"))]:
+
+    bin_cols = [c for c in hai.columns if c.startswith(("domain_", "mod_", "fig_6_2_"))]
+    for c in bin_cols:
         hai[c] = (pd.to_numeric(hai[c], errors="coerce").fillna(0) > 0).astype(int)
+
     if "loss_confidence" in hai.columns:
         hai["loss_confidence"] = hai["loss_confidence"].clip(0, 1)
 
-    # --- 4) Write temp files ---
     ti = tempfile.NamedTemporaryFile(delete=False, suffix=".csv"); ti.close()
     th = tempfile.NamedTemporaryFile(delete=False, suffix=".csv"); th.close()
     inc.to_csv(ti.name, index=False)
     hai.to_csv(th.name, index=False)
     return ti.name, th.name
+
 
 
 # ---------------------------------------------------------------------
