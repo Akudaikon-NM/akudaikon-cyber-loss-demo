@@ -501,15 +501,6 @@ elif mode == "AI Incidents (monetary)":
     st.header("AI Incidents | Monetary Risk")
     st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
 
-    # ---- Inputs
-    c1, c2 = st.columns(2)
-    enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
-    hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
-
-    # OWASP-style validation (no-op if not uploaded)
-    _validate_upload(enriched_up, "Enriched incidents CSV")
-    _validate_upload(hai62_up, "HAI 6.2 join-pack CSV")
-
     c3, c4, c5 = st.columns(3)
     min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
     trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
