@@ -582,17 +582,17 @@ def normalize_aiid_csvs(enriched_src, hai62_src):
     return tmp_inc.name, tmp_hai.name
 
     # Load & fit
-        df_ai = load_ai_table(enriched_src, hai62_src)
+    df_ai = load_ai_table(enriched_src, hai62_src)
 
-        countries = ["(all)"] + (sorted(df_ai["country_group"].dropna().unique().tolist())
+    countries = ["(all)"] + (sorted(df_ai["country_group"].dropna().unique().tolist())
                                  if "country_group" in df_ai else [])
-        country   = st.selectbox("Country", countries or ["(all)"])
-        domains   = st.multiselect(
-            "Domains",
-            ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
+    country   = st.selectbox("Country", countries or ["(all)"])
+    domains   = st.multiselect(
+        "Domains",
+        ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
             default=["finance"]
-        )
-        mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
+    )
+    mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
 
         sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
         freq_model       = fit_frequency(df_ai)
