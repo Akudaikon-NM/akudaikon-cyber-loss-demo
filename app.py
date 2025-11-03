@@ -630,16 +630,17 @@ elif mode == "AI Incidents (monetary)":
         demo_csv = _safe_to_csv(pd.DataFrame({"annual_loss_demo": losses}))
         st.download_button("Download demo losses (CSV)", demo_csv,
                            "ai_demo_annual_losses.csv", "text/csv")
-# Download CSV (hardened)  ── keep this INSIDE `if submitted:`
-out_df = pd.DataFrame({
-    "annual_loss_baseline": base_losses,
-    "annual_loss_controlled": ctrl_losses,
-})
-csv_text = _safe_to_csv(out_df)
-st.download_button(
-    "Download annual losses (CSV)",
-    csv_text,
-    "cyber_annual_losses.csv",
-    "text/csv",
-)
+if 'base_losses' in locals() and 'ctrl_losses' in locals():
+    out_df = pd.DataFrame({
+        "annual_loss_baseline": base_losses,
+        "annual_loss_controlled": ctrl_losses,
+    })
+    csv_text = _safe_to_csv(out_df)
+    st.download_button(
+        "Download annual losses (CSV)",
+        csv_text,
+        "cyber_annual_losses.csv",
+        "text/csv",
+    )
+
 
