@@ -62,23 +62,21 @@ def _validate_upload(file, label: str):
 # ---------------------------------------------------------------------
 def normalize_aiid_csvs(enriched_src, hai62_src):
     """
-    Read the uploaded (or repo) CSVs, fix common schema mismatches,
-    and write normalized temp CSVs. Returns (enriched_path, hai_path).
-
-    Normalizations:
-      - ensure join-pack uses 'incident_id' (rename 'id' -> 'incident_id')
-      - ensure join-pack has 'year' by joining from incidents or deriving from dates
-      - coerce numeric & binary dtypes used by the model
-      - clip loss_confidence to [0,1]
+    Defensive normalizer for AIID + HAI 6.2 CSVs.
+    - Align keys: ensure 'incident_id' on HAI, add 'year' if missing (join/derive).
+    - Propagate useful features from incidents -> HAI when missing.
+    - Create stub columns for common model fields if absent.
+    - Coerce dtypes and clip ranges where appropriate.
+    Returns temp file paths: (norm_inc, norm_hai).
     """
     inc = pd.read_csv(enriched_src)
     hai = pd.read_csv(hai62_src)
 
-    # Key alignment
+    # --- 1) Keys ---
     if "incident_id" not in hai.columns and "id" in hai.columns:
         hai = hai.rename(columns={"id": "incident_id"})
 
-    # Ensure 'year' on join pack
+    # ensure 'year'
     if "year" not in hai.columns:
         year_source = None
         if {"incident_id", "year"}.issubset(inc.columns):
@@ -94,22 +92,55 @@ def normalize_aiid_csvs(enriched_src, hai62_src):
         if year_source is not None:
             hai = hai.merge(year_source, on="incident_id", how="left")
 
-    # Type coercions
+    # --- 2) Candidate features frequently expected downstream ---
+    # If missing on HAI, try to bring from incidents; otherwise create safe defaults.
+    CANDIDATES = {
+        # numerics
+        "loss_usd": np.nan,
+        "loss_confidence": np.nan,
+        "severity_proxy": np.nan,
+        "life_deployment": np.nan,
+        # categorical/grouping
+        "country_group": None,
+        # domain one-hots (extend if your join-pack uses different names)
+        "domain_finance": 0, "domain_healthcare": 0, "domain_transport": 0,
+        "domain_social_media": 0, "domain_hiring_hr": 0,
+        "domain_law_enforcement": 0, "domain_education": 0,
+        # modality one-hots
+        "mod_vision": 0, "mod_nlp": 0, "mod_recommender": 0,
+        "mod_generative": 0, "mod_autonomous": 0,
+    }
+
+    # Prefer incidents -> HAI for any missing candidates
+    join_keys = [c for c in ["incident_id", "year"] if c in hai.columns]
+    if join_keys:
+        from_inc = [c for c in CANDIDATES if c in inc.columns and c not in hai.columns]
+        if from_inc:
+            hai = hai.merge(inc[join_keys + from_inc].drop_duplicates(),
+                            on=join_keys, how="left")
+
+    # Create stubs for anything still missing
+    for col, default in CANDIDATES.items():
+        if col not in hai.columns:
+            hai[col] = default
+
+    # --- 3) Dtypes & cleaning ---
     for c in ["loss_usd", "loss_confidence", "severity_proxy", "life_deployment"]:
         if c in hai.columns:
             hai[c] = pd.to_numeric(hai[c], errors="coerce")
-    bin_cols = [c for c in hai.columns if c.startswith(("domain_", "mod_", "fig_6_2_"))]
-    for c in bin_cols:
+    # binary dummies
+    for c in [c for c in hai.columns if c.startswith(("domain_", "mod_", "fig_6_2_"))]:
         hai[c] = (pd.to_numeric(hai[c], errors="coerce").fillna(0) > 0).astype(int)
     if "loss_confidence" in hai.columns:
         hai["loss_confidence"] = hai["loss_confidence"].clip(0, 1)
 
-    # Write to safe temp files
+    # --- 4) Write temp files ---
     ti = tempfile.NamedTemporaryFile(delete=False, suffix=".csv"); ti.close()
     th = tempfile.NamedTemporaryFile(delete=False, suffix=".csv"); th.close()
     inc.to_csv(ti.name, index=False)
     hai.to_csv(th.name, index=False)
     return ti.name, th.name
+
 
 # ---------------------------------------------------------------------
 # Choose risk mode
