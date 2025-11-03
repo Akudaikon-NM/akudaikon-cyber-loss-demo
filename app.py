@@ -11,9 +11,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-from ai_monetary import (
-    load_ai_table, fit_severity, fit_frequency,
-    scenario_vector, simulate_eal_var, lec_dataframe
 )
 import plotly.express as px
 from typing import Mapping, Optional
@@ -448,6 +445,16 @@ if mode == "Cyber Breach (records-based)":
 # BRANCH 2: AI INCIDENTS (monetary)
 # =====================================================================
 elif mode == "AI Incidents (monetary)":
+        # Lazy import so Cyber mode doesn’t require scikit-learn
+    try:
+        from ai_monetary import (
+            load_ai_table, fit_severity, fit_frequency,
+            scenario_vector, simulate_eal_var, lec_dataframe
+        )
+    except Exception as e:
+        st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
+        st.stop()
+
     st.header("AI Incidents | Monetary Risk")
     st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
 
