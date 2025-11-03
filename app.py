@@ -571,9 +571,34 @@ elif mode == "AI Incidents (monetary)":
     # =================================================================
     # PATH B: No uploads → run DEMO model (self-contained)
     # =================================================================
+        # =================================================================
+    # PATH B: No uploads → run DEMO model (self-contained)
+    # =================================================================
     else:
         st.info("No CSVs uploaded — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
 
         # Base simulation
         base_losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
-        eal, var95, var99 = _metrics_from_losses(base_losses
+        eal, var95, var99 = _metrics_from_losses(base_losses)
+
+        # KPIs
+        k1, k2, k3 = st.columns(3)
+        k1.metric("EAL",    f"${eal:,.0f}")
+        k2.metric("VaR 95", f"${var95:,.0f}")
+        k3.metric("VaR 99", f"${var99:,.0f}")
+
+        # LEC
+        lec_ai = _lec_dataframe(base_losses)
+        fig = px.line(
+            lec_ai, x="loss", y="prob_exceed",
+            title="AI Incidents — Loss Exceedance Curve (DEMO)",
+            labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"}
+        )
+        fig.update_xaxes(type="log")
+        fig.update_yaxes(type="log", range=[-2.5, 0])
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Download
+        buf = io.StringIO()
+        pd.DataFrame({"annual_loss_demo": base_losses}).to_csv(buf, index=False)
+        st.download_button("Download demo losses (CSV)", buf.getvalue(), "ai_demo_annual_losses.csv", "text/csv")
