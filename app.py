@@ -443,23 +443,21 @@ if mode == "Cyber Breach (records-based)":
 # =====================================================================
 # BRANCH 2: AI INCIDENTS (monetary)
 # =====================================================================
-# =====================================================================
-# BRANCH 2: AI INCIDENTS (monetary)
-# =====================================================================
+
 elif mode == "AI Incidents (monetary)":
 
     st.header("AI Incidents | Monetary Risk")
     st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
 
-    # ---- Inputs (upload OR demo) ----
-    c1, c2 = st.columns(2)
-    enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
-    hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
+    # --- at the top of the AI Incidents branch (after sliders/inputs) ---
+from pathlib import Path
 
-    c3, c4, c5 = st.columns(3)
-    min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
-    trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
-    seed     = int(c5.number_input("Random seed", value=42, step=1))
+# Resolve repo-relative data files
+REPO_DIR   = Path(__file__).resolve().parent
+DATA_DIR   = REPO_DIR / "data"
+DEF_ENRICH = DATA_DIR / "incidents.csv"
+DEF_HAI62  = DATA_DIR / "joinpack_hai_6_2.csv"
+
 
     # ---- Helper: LEC from losses (no external deps) ----
     def _lec_dataframe(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
