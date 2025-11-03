@@ -13,6 +13,10 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 from typing import Mapping, Optional
+# --- Add near the top of app.py (or above PATH A block) ---
+import os, tempfile
+import pandas as pd
+import numpy as np
 
 st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 st.title("Akudaikon | Cyber-Loss Demo")
@@ -517,6 +521,65 @@ elif mode == "AI Incidents (monetary)":
             enriched_src = str(DEF_ENRICH)
             hai62_src    = str(DEF_HAI62)
             st.success("Loaded repo defaults: data/incidents.csv and data/joinpack_hai_6_2.csv")
+# --- Add this helper ABOVE the "Load & fit" section in PATH A ---
+def normalize_aiid_csvs(enriched_src, hai62_src):
+    """
+    Read the uploaded (or repo) CSVs, fix common schema mismatches,
+    and write normalized temp CSVs. Returns (enriched_path, hai_path).
+    Normalizations:
+      - ensure join-pack uses 'incident_id' (rename 'id' -> 'incident_id')
+      - ensure join-pack has 'year' by joining from enriched if needed
+      - coerce dtypes for common model features
+    """
+    inc = pd.read_csv(enriched_src)
+    hai = pd.read_csv(hai62_src)
+
+    # 1) Key column alignment
+    if 'incident_id' not in hai.columns and 'id' in hai.columns:
+        hai = hai.rename(columns={'id': 'incident_id'})
+
+    # 2) Ensure 'year' exists in join-pack (merge from incidents if available)
+    if 'year' not in hai.columns:
+        year_source = None
+        if {'incident_id','year'}.issubset(inc.columns):
+            year_source = inc[['incident_id','year']].drop_duplicates()
+        else:
+            # Try to derive from a date column in incidents
+            for date_col in ['published','date','incident_date','event_date','report_date']:
+                if date_col in inc.columns:
+                    inc['_year_tmp'] = pd.to_datetime(inc[date_col], errors='coerce').dt.year
+                    if inc['_year_tmp'].notna().any():
+                        inc = inc.rename(columns={'_year_tmp':'year'})
+                        year_source = inc[['incident_id','year']].drop_duplicates()
+                        break
+            if '_year_tmp' in inc.columns and 'year' not in inc.columns:
+                inc = inc.drop(columns=['_year_tmp'])
+
+        if year_source is not None:
+            hai = hai.merge(year_source, on='incident_id', how='left')
+
+    # 3) Clean up common feature columns (optional but helpful)
+    num_like = ['loss_usd','loss_confidence','severity_proxy','life_deployment']
+    for c in num_like:
+        if c in hai.columns:
+            hai[c] = pd.to_numeric(hai[c], errors='coerce')
+
+    # Binary dummies sometimes come in as floats/strings—coerce to 0/1
+    bin_cols = [c for c in hai.columns if c.startswith(('domain_','mod_','fig_6_2_'))]
+    for c in bin_cols:
+        if c in hai.columns:
+            hai[c] = (pd.to_numeric(hai[c], errors='coerce').fillna(0) > 0).astype(int)
+
+    # loss_confidence often intended in [0,1]
+    if 'loss_confidence' in hai.columns:
+        hai['loss_confidence'] = hai['loss_confidence'].clip(0, 1)
+
+    # 4) Write normalized temp CSVs and return their paths
+    tmp_inc = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+    tmp_hai = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+    inc.to_csv(tmp_inc.name, index=False)
+    hai.to_csv(tmp_hai.name, index=False)
+    return tmp_inc.name, tmp_hai.name
 
         # Load & fit
         df_ai = load_ai_table(enriched_src, hai62_src)
