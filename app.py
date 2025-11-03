@@ -581,7 +581,7 @@ def normalize_aiid_csvs(enriched_src, hai62_src):
     hai.to_csv(tmp_hai.name, index=False)
     return tmp_inc.name, tmp_hai.name
 
-        # Load & fit
+    # Load & fit
         df_ai = load_ai_table(enriched_src, hai62_src)
 
         countries = ["(all)"] + (sorted(df_ai["country_group"].dropna().unique().tolist())
