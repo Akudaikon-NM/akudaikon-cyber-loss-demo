@@ -501,6 +501,89 @@ elif mode == "AI Incidents (monetary)":
         return (float(losses.mean()),
                 float(np.percentile(losses, 95)),
                 float(np.percentile(losses, 99)))
+# ---------- Security & CSV utilities ----------
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB hard cap (Streamlit shows 200MB, we use a safer limit)
+
+def _escape_csv_injection(val):
+    """Mitigate CSV injection when files are opened in spreadsheet tools."""
+    if isinstance(val, str) and val and val[0] in ("=", "+", "-", "@"):
+        return "'" + val
+    return val
+
+def _safe_to_csv(df: pd.DataFrame) -> str:
+    """Return CSV text with simple CSV-injection mitigation on object columns."""
+    df_safe = df.copy()
+    obj_cols = df_safe.select_dtypes(include=["object"]).columns
+    if len(obj_cols):
+        df_safe[obj_cols] = df_safe[obj_cols].applymap(_escape_csv_injection)
+    buf = io.StringIO(newline="")
+    df_safe.to_csv(buf, index=False)
+    return buf.getvalue()
+
+def _validate_upload(file, label: str):
+    """Basic OWASP-style checks: size & type."""
+    if file is None:
+        return
+    if getattr(file, "size", 0) > MAX_UPLOAD_BYTES:
+        st.error(f"{label}: file is too large (> {MAX_UPLOAD_BYTES // (1024*1024)}MB).")
+        st.stop()
+    # Streamlit gives content_type for some browsers; tolerate unknown but prefer text/csv
+    ctype = getattr(file, "type", "") or getattr(file, "content_type", "")
+    if ctype and "csv" not in ctype.lower() and "text" not in ctype.lower():
+        st.error(f"{label}: expected a CSV (got {ctype}).")
+        st.stop()
+
+# ---------- Normalizer for AIID/HAI CSVs ----------
+def normalize_aiid_csvs(enriched_src, hai62_src):
+    """
+    Read the uploaded (or repo) CSVs, fix common schema mismatches,
+    and write normalized temp CSVs. Returns (enriched_path, hai_path).
+
+    Normalizations:
+      - ensure join-pack uses 'incident_id' (rename 'id' -> 'incident_id')
+      - ensure join-pack has 'year' by joining from incidents or deriving from dates
+      - coerce numeric & binary dtypes used by the model
+      - clip loss_confidence to [0,1]
+    """
+    inc = pd.read_csv(enriched_src)
+    hai = pd.read_csv(hai62_src)
+
+    # Key alignment
+    if "incident_id" not in hai.columns and "id" in hai.columns:
+        hai = hai.rename(columns={"id": "incident_id"})
+
+    # Ensure 'year' on join pack
+    if "year" not in hai.columns:
+        year_source = None
+        if {"incident_id", "year"}.issubset(inc.columns):
+            year_source = inc[["incident_id", "year"]].drop_duplicates()
+        else:
+            for date_col in ["published", "date", "incident_date", "event_date", "report_date"]:
+                if date_col in inc.columns:
+                    yy = pd.to_datetime(inc[date_col], errors="coerce").dt.year
+                    if yy.notna().any():
+                        inc = inc.assign(year=yy)
+                        year_source = inc[["incident_id", "year"]].drop_duplicates()
+                        break
+        if year_source is not None:
+            hai = hai.merge(year_source, on="incident_id", how="left")
+
+    # Type coercions
+    for c in ["loss_usd", "loss_confidence", "severity_proxy", "life_deployment"]:
+        if c in hai.columns:
+            hai[c] = pd.to_numeric(hai[c], errors="coerce")
+    bin_cols = [c for c in hai.columns if c.startswith(("domain_", "mod_", "fig_6_2_"))]
+    for c in bin_cols:
+        hai[c] = (pd.to_numeric(hai[c], errors="coerce").fillna(0) > 0).astype(int)
+    if "loss_confidence" in hai.columns:
+        hai["loss_confidence"] = hai["loss_confidence"].clip(0, 1)
+
+    # Write to safe temp files
+    ti = tempfile.NamedTemporaryFile(delete=False, suffix=".csv"); ti.close()
+    th = tempfile.NamedTemporaryFile(delete=False, suffix=".csv"); th.close()
+    inc.to_csv(ti.name, index=False)
+    hai.to_csv(th.name, index=False)
+    return ti.name, th.name
 
     # ---- PATH A: Uploads or repo defaults → real pipeline
     if source in ("uploads", "repo"):
