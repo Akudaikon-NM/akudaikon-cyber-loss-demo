@@ -501,6 +501,11 @@ elif mode == "AI Incidents (monetary)":
     st.header("AI Incidents | Monetary Risk")
     st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
 
+    # ---- Inputs
+    c1, c2 = st.columns(2)
+    enriched_up = c1.file_uploader("Enriched incidents CSV", type=["csv"], accept_multiple_files=False)
+    hai62_up    = c2.file_uploader("HAI 6.2 join-pack CSV", type=["csv"], accept_multiple_files=False)
+
     c3, c4, c5 = st.columns(3)
     min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
     trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
@@ -519,34 +524,30 @@ elif mode == "AI Incidents (monetary)":
     else:
         source = "demo"
 
-    # ---- Helper: LEC from losses (for demo & generic use)
+    # ---- Demo fallback
     def _lec_dataframe(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
         lo = max(1.0, float(np.percentile(losses, 1)))
         hi = float(np.percentile(losses, 99.9))
-        if hi <= lo:
-            hi = lo * 10.0
+        if hi <= lo: hi = lo * 10.0
         xs = np.logspace(np.log10(lo), np.log10(hi), n)
         probs = [(losses >= x).mean() for x in xs]
         return pd.DataFrame({"loss": xs, "prob_exceed": probs})
 
-    # ---- Synthetic demo generator (final fallback)
     def _simulate_ai_demo(trials: int, seed: int, lam: float = 0.45,
                           sev_mu: float = 11.5, sev_sigma: float = 1.0) -> np.ndarray:
         rng = np.random.default_rng(seed)
         k = rng.poisson(lam=lam, size=trials)
         m = int(k.max()) if trials > 0 else 0
-        if m == 0:
-            return np.zeros(trials)
+        if m == 0: return np.zeros(trials)
         sev = rng.lognormal(mean=sev_mu, sigma=sev_sigma, size=(trials, m))
         mask = np.arange(m)[None, :] < k[:, None]
         return (sev * mask).sum(axis=1)
 
-    def _metrics_from_losses(losses: np.ndarray) -> tuple[float, float, float]:
+    def _metrics_from_losses(losses: np.ndarray):
         return (float(losses.mean()),
                 float(np.percentile(losses, 95)),
                 float(np.percentile(losses, 99)))
 
-    # ---- PATH A: Uploads or repo defaults → real pipeline
     if source in ("uploads", "repo"):
         try:
             from ai_monetary import (
@@ -557,7 +558,10 @@ elif mode == "AI Incidents (monetary)":
             st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
             st.stop()
 
+        # Set paths + validate uploads when applicable
         if source == "uploads":
+            _validate_upload(enriched_up, "Enriched incidents CSV")
+            _validate_upload(hai62_up, "HAI 6.2 join-pack CSV")
             enriched_src = enriched_up
             hai62_src    = hai62_up
             st.success("Using uploaded CSVs.")
@@ -566,67 +570,21 @@ elif mode == "AI Incidents (monetary)":
             hai62_src    = str(DEF_HAI62)
             st.success("Loaded repo defaults: data/incidents.csv and data/joinpack_hai_6_2.csv")
 
-        # Normalize before loading the model table
-norm_inc, norm_hai = normalize_aiid_csvs(enriched_src, hai62_src)
-
-def _retry_load_with_missing_cols_added(norm_inc_path, norm_hai_path, err):
-    # Try to parse missing column names from the KeyError message
-    msg = str(err)
-    missing = []
-    # Pandas often formats like "['colA', 'colB'] not in index" or "'colA' not in index"
-    import re, ast
-    m = re.search(r"\[(.*?)\]\s+not in index", msg)
-    if m:
-        # turn " 'a','b' " into a python list
+        # Normalize → load → model
+        norm_inc, norm_hai = normalize_aiid_csvs(enriched_src, hai62_src)
         try:
-            missing = ast.literal_eval("[" + m.group(1) + "]")
-        except Exception:
-            missing = [x.strip(" '\"") for x in m.group(1).split(",")]
-    else:
-        m = re.search(r"'([^']+)' not in index", msg)
-        if m:
-            missing = [m.group(1)]
-
-    if not missing:
-        raise err  # nothing to fix automatically
-
-    # Open, add missing cols with safe defaults, write back, and retry
-    hai_df = pd.read_csv(norm_hai_path)
-    for col in missing:
-        if col not in hai_df.columns:
-            # choose a sensible default: ints -> 0, floats -> NaN, otherwise None
-            if col.startswith(("domain_", "mod_", "fig_6_2_")):
-                hai_df[col] = 0
-            elif col in ("loss_usd", "loss_confidence", "severity_proxy", "life_deployment"):
-                hai_df[col] = np.nan
-            elif col in ("year",):
-                # if truly missing, try to copy from incidents or keep NaN
-                hai_df[col] = np.nan
-            else:
-                hai_df[col] = None
-    hai_df.to_csv(norm_hai_path, index=False)
-
-    # try again
-    return load_ai_table(norm_inc_path, norm_hai_path)
-
-try:
-    df_ai = load_ai_table(norm_inc, norm_hai)
-except KeyError as e:
-    # one automatic repair attempt
-    df_ai = _retry_load_with_missing_cols_added(norm_inc, norm_hai, e)
-finally:
-    # Best-effort cleanup of temp files (after retry path uses them)
-    for p in (norm_inc, norm_hai):
-        try: os.unlink(p)
-        except Exception: pass
-
+            df_ai = load_ai_table(norm_inc, norm_hai)
+        finally:
+            for p in (norm_inc, norm_hai):
+                try: os.unlink(p)
+                except Exception: pass
 
         countries = ["(all)"] + (sorted(df_ai["country_group"].dropna().unique().tolist())
                                  if "country_group" in df_ai else [])
         country = st.selectbox("Country", countries or ["(all)"])
         domains = st.multiselect(
             "Domains",
-            ["finance", "healthcare", "transport", "social_media", "hiring_hr", "law_enforcement", "education"],
+            ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
             default=["finance"]
         )
         mods = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
@@ -635,16 +593,15 @@ finally:
         freq_model       = fit_frequency(df_ai)
         x_row            = scenario_vector(df_ai, None if country=="(all)" else country, domains, mods)
 
-        eal, var95, var99, losses = simulate_eal_var(freq_model, sev_model, sigma, x_row,
-                                                     trials=trials, seed=seed)
+        eal, var95, var99, losses = simulate_eal_var(
+            freq_model, sev_model, sigma, x_row, trials=trials, seed=seed
+        )
 
-        # KPIs
         k1, k2, k3 = st.columns(3)
         k1.metric("EAL",    f"${eal:,.0f}")
         k2.metric("VaR 95", f"${var95:,.0f}")
         k3.metric("VaR 99", f"${var99:,.0f}")
 
-        # LEC
         lec_ai = lec_dataframe(losses)
         fig = px.line(lec_ai, x="loss", y="prob_exceed",
                       title="AI Incidents — Loss Exceedance Curve",
@@ -652,10 +609,8 @@ finally:
         fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
         st.plotly_chart(fig, use_container_width=True)
 
-    # ---- PATH B: Nothing available → synthetic demo
     else:
         st.info("No CSVs found — running synthetic **demo dataset** (Poisson frequency + LogNormal severity).")
-
         losses = _simulate_ai_demo(trials=trials, seed=seed, lam=0.45, sev_mu=11.5, sev_sigma=1.0)
         eal, var95, var99 = _metrics_from_losses(losses)
 
@@ -665,14 +620,20 @@ finally:
         k3.metric("VaR 99", f"${var99:,.0f}")
 
         lec_ai = _lec_dataframe(losses)
-        fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve (DEMO)",
+        fig = px.line(lec_ai, x="loss", y="prob_exceed",
+                      title="AI Incidents — Loss Exceedance Curve (DEMO)",
                       labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
         fig.update_xaxes(type="log"); fig.update_yaxes(type="log", range=[-2.5, 0])
         st.plotly_chart(fig, use_container_width=True)
 
-        # Optional: safe demo CSV
+        # optional download, with CSV-injection hardening
         demo_csv = _safe_to_csv(pd.DataFrame({"annual_loss_demo": losses}))
         st.download_button("Download demo losses (CSV)", demo_csv,
                            "ai_demo_annual_losses.csv", "text/csv")
-
-
+out_df = pd.DataFrame({
+    "annual_loss_baseline": base_losses,
+    "annual_loss_controlled": ctrl_losses
+})
+csv_text = _safe_to_csv(out_df)
+st.download_button("Download annual losses (CSV)", csv_text,
+                   "cyber_annual_losses.csv", "text/csv")
