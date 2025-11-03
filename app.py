@@ -210,5 +210,304 @@ NAICS_FINANCE_PRESETS = {
     "523991 — Trust, Fiduciary & Custody Activities": {"lambda": 0.35, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 700_000_000.0},
     "523999 — Miscellaneous Financial Investment Activities": {"lambda": 0.30, "records_cap": 500_000, "cost_per_record": 175.0, "net_worth": 200_000_000.0},
     "524113 — Direct Life Insurance Carriers": {"lambda": 0.50, "records_cap": 3_000_000, "cost_per_record": 210.0, "net_worth": 1_500_000_000.0},
-    "524114 — Direct Health & Medical Insurance Carriers": {"lambda": 0.55, "records_cap": 4_000_000, "cost_per_record": 250.0, "net_worth": 1_800_000_000.
+    "524114 — Direct Health & Medical Insurance Carriers": {"lambda": 0.55, "records_cap": 4_000_000, "cost_per_record": 250.0, "net_worth": 1_800_000_000.0},
+    "524126 — Direct Property & Casualty Insurance Carriers": {"lambda": 0.45, "records_cap": 2_000_000, "cost_per_record": 200.0, "net_worth": 1_500_000_000.0},
+    "524127 — Direct Title Insurance Carriers": {"lambda": 0.35, "records_cap": 1_000_000, "cost_per_record": 185.0, "net_worth": 600_000_000.0},
+    "524128 — Other Direct Insurance Carriers": {"lambda": 0.40, "records_cap": 1_500_000, "cost_per_record": 200.0, "net_worth": 900_000_000.0},
+    "524210 — Insurance Agencies & Brokerages": {"lambda": 0.30, "records_cap": 600_000, "cost_per_record": 185.0, "net_worth": 150_000_000.0},
+    "524291 — Claims Adjusting": {"lambda": 0.30, "records_cap": 500_000, "cost_per_record": 185.0, "net_worth": 120_000_000.0},
+    "524292 — Third-Party Administration of Insurance & Pension Funds": {"lambda": 0.40, "records_cap": 1_500_000, "cost_per_record": 200.0, "net_worth": 400_000_000.0},
+    "524298 — All Other Insurance Related Activities": {"lambda": 0.30, "records_cap": 500_000, "cost_per_record": 185.0, "net_worth": 120_000_000.0},
+    "525110 — Pension Funds": {"lambda": 0.35, "records_cap": 2_000_000, "cost_per_record": 200.0, "net_worth": 2_000_000_000.0},
+    "525120 — Health & Welfare Funds": {"lambda": 0.40, "records_cap": 2_500_000, "cost_per_record": 230.0, "net_worth": 1_200_000_000.0},
+    "525190 — Other Insurance Funds": {"lambda": 0.35, "records_cap": 1_500_000, "cost_per_record": 210.0, "net_worth": 900_000_000.0},
+    "525910 — Open-End Investment Funds": {"lambda": 0.35, "records_cap": 1_500_000, "cost_per_record": 175.0, "net_worth": 1_500_000_000.0},
+    "525920 — Trusts, Estates & Agency Accounts": {"lambda": 0.30, "records_cap": 800_000, "cost_per_record": 185.0, "net_worth": 700_000_000.0},
+    "525990 — Other Financial Vehicles": {"lambda": 0.30, "records_cap": 1_000_000, "cost_per_record": 175.0, "net_worth": 1_000_000_000.0},
+}
 
+# -----------------------------------------------
+# Data-driven control effects: shares source
+# -----------------------------------------------
+with st.sidebar.expander("Data-driven control effects (shares)", expanded=False):
+    st.caption("Use NAICS-52 demo shares or upload CSVs to weight control effects by ACTION/PATTERN.")
+    shares_mode = st.radio("Shares source", ["Built-in NAICS-52 (demo)", "Upload CSVs"], index=0, key="shares_mode")
+    action_shares = DEFAULT_ACTION_SHARES
+    pattern_shares = DEFAULT_PATTERN_SHARES
+
+    if shares_mode == "Upload CSVs":
+        up_actions = st.file_uploader("Upload action shares CSV (columns: category, share)", type=["csv"], key="up_actions")
+        up_patterns = st.file_uploader("Upload pattern shares CSV (columns: category, share)", type=["csv"], key="up_patterns")
+
+        def _read_shares(file) -> dict:
+            try:
+                df_u = pd.read_csv(file)
+                cat_col = next((c for c in df_u.columns if c.lower() in ["category", "action", "pattern", "name"]), None)
+                share_col = next((c for c in df_u.columns if "share" in c.lower() or "weight" in c.lower()), None)
+                if not cat_col or not share_col:
+                    st.warning("CSV must have columns like [category, share]. Using defaults.")
+                    return {}
+                return _normalize_shares(dict(zip(df_u[cat_col], df_u[share_col])))
+            except Exception as e:
+                st.warning(f"Could not parse shares CSV: {e}. Using defaults.")
+                return {}
+
+        if up_actions is not None:
+            tmp = _read_shares(up_actions)
+            if tmp: action_shares = tmp
+        if up_patterns is not None:
+            tmp = _read_shares(up_patterns)
+            if tmp: pattern_shares = tmp
+
+    if action_shares:
+        st.write("**Action shares**")
+        st.dataframe(pd.DataFrame({"action": list(action_shares.keys()), "share": list(action_shares.values())}))
+    if pattern_shares:
+        st.write("**Pattern shares**")
+        st.dataframe(pd.DataFrame({"pattern": list(pattern_shares.keys()), "share": list(pattern_shares.values())}))
+
+st.session_state["_action_shares"] = action_shares
+st.session_state["_pattern_shares"] = pattern_shares
+
+# =====================================================================
+# BRANCH 1: CYBER BREACH (records-based)
+# =====================================================================
+if mode == "Cyber Breach (records-based)":
+
+    with st.sidebar.expander("Finance NAICS presets", expanded=False):
+        use_naics = st.checkbox("Use preset", value=False, key="naics_enable")
+        _keys = list(NAICS_FINANCE_PRESETS.keys())
+        _default_label = "522130 — Credit Unions"
+        _default_index = _keys.index(_default_label) if _default_label in _keys else 0
+        choice = st.selectbox("Select NAICS (Finance)", _keys, index=_default_index,
+                              disabled=not use_naics, key="naics_choice")
+        if use_naics:
+            p = NAICS_FINANCE_PRESETS[choice]
+            st.session_state["in_lambda"]      = p["lambda"]
+            st.session_state["in_records_cap"] = p["records_cap"]
+            st.session_state["in_cpr"]         = p["cost_per_record"]
+            st.session_state["in_networth"]    = p["net_worth"]
+            st.caption(f"Preset applied: {choice}")
+
+    # Scenario + Controls
+    with st.sidebar.form("scenario_form"):
+        st.header("Scenario")
+        trials            = st.number_input("Simulation trials", min_value=1_000, max_value=500_000, value=50_000, step=5_000, key="in_trials")
+        net_worth         = st.number_input("Net worth (USD)", min_value=0.0, value=1_000_000.0, step=100_000.0, format="%.0f", key="in_networth")
+        seed              = st.number_input("Random seed", min_value=0, value=42, step=1, key="in_seed")
+        num_customers     = st.number_input("Records / customers cap", min_value=1, value=1_000_000, step=10_000, key="in_records_cap")
+        cost_per_customer = st.number_input("Cost per record (USD)", min_value=1.0, value=150.0, step=10.0, format="%.2f", key="in_cpr")
+        lam               = st.number_input("Annual incident rate (lambda)", min_value=0.0, value=0.40, step=0.05, format="%.2f", key="in_lambda")
+
+        st.markdown("---")
+        st.subheader("Controls")
+        ctrl = ControlSet(
+            server   = st.checkbox("Server hardening / patching", value=False, key="ctl_server"),
+            media    = st.checkbox("Media protection / encryption/DLP", value=False, key="ctl_media"),
+            error    = st.checkbox("Change control / error-proofing", value=False, key="ctl_error"),
+            external = st.checkbox("External / MFA & perimeter", value=False, key="ctl_external"),
+        )
+
+        with st.expander("Control costs (USD/yr)", expanded=False):
+            costs = ControlCosts(
+                server   = st.number_input("Server cost",   min_value=0.0, value=80_000.0,  step=1_000.0, format="%.0f", key="cost_server"),
+                media    = st.number_input("Media cost",    min_value=0.0, value=90_000.0,  step=1_000.0, format="%.0f", key="cost_media"),
+                error    = st.number_input("Error cost",    min_value=0.0, value=60_000.0,  step=1_000.0, format="%.0f", key="cost_error"),
+                external = st.number_input("External cost", min_value=0.0, value=100_000.0, step=1_000.0, format="%.0f", key="cost_external"),
+            )
+
+        st.caption(f"Selected controls annual cost: ${total_cost(ctrl, costs):,.0f}")
+        submitted = st.form_submit_button("Run simulation", type="primary", use_container_width=True)
+
+    # ---- Run the simulation once the form is submitted ----
+    if submitted:
+        with st.spinner("Simulating..."):
+            # Config
+            cfg = ModelConfig(
+                trials=int(trials),
+                net_worth=float(net_worth),
+                seed=int(seed),
+                record_cap=int(num_customers),
+                cost_per_record=float(cost_per_customer),
+            )
+
+            # Frequency (Bayesian optional)
+            lam_base = float(lam)
+            lam_draws = None
+            if use_bayes and T_obs > 0:
+                lam_draws = posterior_lambda(
+                    float(alpha0), float(beta0), int(k_obs), float(T_obs),
+                    draws=200, seed=int(seed) + 100
+                )
+                lam_base = float(np.median(lam_draws))
+
+            fp = FreqParams(lam=lam_base, p_any=0.85, negbin=bool(use_negbin), r=float(disp_r))
+
+            # Severity prior (spliced)
+            sp: SplicedParams = build_spliced_from_priors(cfg)
+
+            # Baseline
+            base_losses = simulate_annual_losses(cfg, fp, sp)
+            base_m = compute_metrics(base_losses, cfg.net_worth)
+
+            # Controlled (data-driven effects)
+            ash = st.session_state.get("_action_shares", DEFAULT_ACTION_SHARES)
+            psh = st.session_state.get("_pattern_shares", DEFAULT_PATTERN_SHARES)
+            try:
+                ce = effects_from_shares(ctrl, ash, psh)
+            except Exception:
+                ce = control_effects(ctrl)
+
+            ctrl_losses = simulate_annual_losses(cfg, fp, sp, ce)
+            ctrl_m = compute_metrics(ctrl_losses, cfg.net_worth)
+
+            # ROI
+            ctrl_cost = total_cost(ctrl, costs)
+            delta_eal = base_m["EAL"] - ctrl_m["EAL"]
+            rosi = ((delta_eal - ctrl_cost) / ctrl_cost * 100.0) if ctrl_cost > 0 else np.nan
+
+            # KPI tiles
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("EAL (Baseline)",   f"${base_m['EAL']:,.0f}")
+            c2.metric("EAL (Controlled)", f"${ctrl_m['EAL']:,.0f}", delta=f"-${delta_eal:,.0f}")
+            c3.metric("VaR95 (Base→Ctrl)", f"${base_m['VaR95']:,.0f}", delta=f"-${(base_m['VaR95'] - ctrl_m['VaR95']):,.0f}")
+            c4.metric("VaR99 (Base→Ctrl)", f"${base_m['VaR99']:,.0f}", delta=f"-${(base_m['VaR99'] - ctrl_m['VaR99']):,.0f}")
+
+            d1, d2, d3 = st.columns(3)
+            d1.metric("VaR95 / Net Worth (Base)", f"{base_m['VaR95_to_NetWorth']*100:,.2f}%")
+            d2.metric("VaR95 / Net Worth (Ctrl)", f"{ctrl_m['VaR95_to_NetWorth']*100:,.2f}%")
+            d3.metric("ROSI (annualized)", "—" if np.isnan(rosi) else f"{rosi:,.1f}%")
+
+            st.markdown("---")
+
+            # LEC (with optional credible bands)
+            lec_b = lec(base_losses, n=200).assign(scenario="Baseline")
+            lec_c = lec(ctrl_losses, n=200).assign(scenario="Controlled")
+
+            fig = go.Figure()
+            fig.add_scatter(x=lec_b["loss"], y=lec_b["exceed_prob"], mode="lines", name="Baseline")
+            fig.add_scatter(x=lec_c["loss"], y=lec_c["exceed_prob"], mode="lines", name="Controlled")
+
+            if use_bayes and T_obs > 0 and lam_draws is not None:
+                S = min(80, len(lam_draws))
+                # Baseline bands
+                samples = []
+                for i in range(S):
+                    fp_i = FreqParams(lam=float(lam_draws[i]), p_any=fp.p_any, negbin=fp.negbin, r=fp.r)
+                    samples.append(simulate_annual_losses(cfg, fp_i, sp))
+                samples = np.stack(samples, axis=0)
+                band_b = lec_bands(samples, n=200, level=0.90)
+                fig.add_scatter(x=band_b["loss"], y=band_b["hi"], mode="lines",
+                                name="Baseline 90% hi", line=dict(width=0.5), showlegend=False)
+                fig.add_scatter(x=band_b["loss"], y=band_b["lo"], mode="lines",
+                                name="Baseline 90% lo", line=dict(width=0.5),
+                                fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
+                # Controlled bands
+                samples_c = []
+                for i in range(S):
+                    fp_i = FreqParams(lam=float(lam_draws[i]), p_any=fp.p_any, negbin=fp.negbin, r=fp.r)
+                    samples_c.append(simulate_annual_losses(cfg, fp_i, sp, ce))
+                samples_c = np.stack(samples_c, axis=0)
+                band_c = lec_bands(samples_c, n=200, level=0.90)
+                fig.add_scatter(x=band_c["loss"], y=band_c["hi"], mode="lines",
+                                name="Controlled 90% hi", line=dict(width=0.5), showlegend=False)
+                fig.add_scatter(x=band_c["loss"], y=band_c["lo"], mode="lines",
+                                name="Controlled 90% lo", line=dict(width=0.5),
+                                fill="tonexty", fillcolor="rgba(0,0,0,0.08)", showlegend=False)
+
+            fig.update_layout(title="Loss Exceedance Curve (LEC) with Optional Credible Bands",
+                              xaxis_title="Annual Loss (USD)", yaxis_title="P(Loss >= x)")
+            fig.update_xaxes(type="log")
+            fig.update_yaxes(type="log", range=[-2.5, 0])
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Summary table
+            st.subheader("Summary")
+            summary_df = pd.DataFrame({
+                "Metric": ["EAL", "VaR95", "VaR99", "VaR95/NetWorth", "VaR99/NetWorth",
+                           "Control Cost", "Delta EAL", "ROSI %"],
+                "Baseline":  [base_m["EAL"], base_m["VaR95"], base_m["VaR99"],
+                              base_m["VaR95_to_NetWorth"], base_m["VaR99_to_NetWorth"],
+                              np.nan, np.nan, np.nan],
+                "Controlled":[ctrl_m["EAL"], ctrl_m["VaR95"], ctrl_m["VaR99"],
+                              ctrl_m["VaR95_to_NetWorth"], ctrl_m["VaR99_to_NetWorth"],
+                              ctrl_cost, delta_eal, rosi],
+            })
+            st.dataframe(summary_df.style.format({"Baseline": "{:,.2f}", "Controlled": "{:,.2f}"}), use_container_width=True)
+
+            # Download CSV
+            buf = io.StringIO()
+            pd.DataFrame({
+                "annual_loss_baseline": base_losses,
+                "annual_loss_controlled": ctrl_losses
+            }).to_csv(buf, index=False)
+            st.download_button("Download annual losses (CSV)", buf.getvalue(),
+                               "cyber_annual_losses.csv", "text/csv")
+
+# =====================================================================
+# BRANCH 2: AI INCIDENTS (monetary)
+# =====================================================================
+elif mode == "AI Incidents (monetary)":
+    st.header("AI Incidents | Monetary Risk")
+    st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
+
+    c1, c2 = st.columns(2)
+    enriched_csv = c1.text_input("Enriched incidents CSV", "/mnt/data/akudaikon_incidents_enriched.csv")
+    hai62_csv    = c2.text_input("HAI 6.2 join-pack CSV", "/mnt/data/akudaikon_joinpack_hai_6_2.csv")
+
+    c3, c4, c5 = st.columns(3)
+    min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
+    trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
+    seed     = int(c5.number_input("Random seed", value=42, step=1))
+
+    df_ai = load_ai_table(enriched_csv, hai62_csv)
+
+    countries = ["(all)"] + sorted(df_ai["country_group"].dropna().unique().tolist()) if "country_group" in df_ai else ["(all)"]
+    country   = st.selectbox("Country", countries)
+    domains   = st.multiselect("Domains", ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"], default=["finance"])
+    mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
+
+    sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
+    freq_model       = fit_frequency(df_ai)
+    x_row            = scenario_vector(df_ai, None if country=="(all)" else country, domains, mods)
+
+    eal, var95, var99, losses = simulate_eal_var(freq_model, sev_model, sigma, x_row, trials=trials, seed=seed)
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric("EAL",    f"${eal:,.0f}")
+    k2.metric("VaR 95", f"${var95:,.0f}")
+    k3.metric("VaR 99", f"${var99:,.0f}")
+
+    # LEC (log-log like your cyber view)
+    lec_ai = lec_dataframe(losses)
+    fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve",
+                  labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
+    fig.update_xaxes(type="log")
+    fig.update_yaxes(type="log", range=[-2.5, 0])
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### Control ROI (illustrative)")
+    st.caption("Swap these with real levers (e.g., policy compliance, deployment gating, model risk controls).")
+
+    def _ctl_policy_momentum(x):
+        for c in [c for c in x.columns if c.startswith("fig_6_2_")]:
+            x[c] = x[c] * 1.10  # assume higher policy activity → lower exposure
+        return x
+
+    def _ctl_deployment_gate(x):
+        if "severity_proxy" in x.columns: x["severity_proxy"] = x["severity_proxy"] * 0.85
+        if "life_deployment" in x.columns: x["life_deployment"] = x["life_deployment"] * 0.90
+        return x
+
+    def _roi_row(fn, label, cost, trials=5000):
+        x2 = fn(x_row.copy())
+        eal2, _, _, _ = simulate_eal_var(freq_model, sev_model, sigma, x2, trials=trials, seed=seed)
+        dEAL = eal - eal2
+        rosi = (dEAL - cost) / cost if cost > 0 else np.nan
+        return dict(control=label, EAL_base=eal, EAL_with=eal2, dEAL=dEAL, cost=cost, ROSI=rosi)
+
+    roi_df = pd.DataFrame([
+        _roi_row(_ctl_policy_momentum, "Policy momentum (+10% AI policy)", 150_000),
+        _roi_row(_ctl_deployment_gate, "Deployment gating (-15% severity proxy)", 250_000),
+    ]).sort_values("dEAL", ascending=False)
+    st.dataframe(roi_df, use_container_width=True)
