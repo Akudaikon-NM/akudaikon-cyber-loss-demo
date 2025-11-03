@@ -7,16 +7,16 @@ from engine import (
 from controls import ControlSet, ControlCosts, control_effects, total_cost
 
 import io
+import os
+import tempfile
+from typing import Mapping, Optional
+
 import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
-from typing import Mapping, Optional
-# --- Add near the top of app.py (or above PATH A block) ---
-import os, tempfile
-import pandas as pd
-import numpy as np
+
 
 st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 st.title("Akudaikon | Cyber-Loss Demo")
