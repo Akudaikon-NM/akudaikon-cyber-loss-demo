@@ -441,14 +441,18 @@ if mode == "Cyber Breach (records-based)":
             })
             st.dataframe(summary_df.style.format({"Baseline": "{:,.2f}", "Controlled": "{:,.2f}"}), use_container_width=True)
 
-            # Download CSV
-            buf = io.StringIO()
-            pd.DataFrame({
-                "annual_loss_baseline": base_losses,
-                "annual_loss_controlled": ctrl_losses
-            }).to_csv(buf, index=False)
-            st.download_button("Download annual losses (CSV)", buf.getvalue(),
-                               "cyber_annual_losses.csv", "text/csv")
+            out_df = pd.DataFrame({
+    "annual_loss_baseline": base_losses,
+    "annual_loss_controlled": ctrl_losses
+})
+csv_text = _safe_to_csv(out_df)
+st.download_button(
+    "Download annual losses (CSV)",
+    csv_text,
+    "cyber_annual_losses.csv",
+    "text/csv"
+)
+
 
 # =====================================================================
 # BRANCH 2: AI INCIDENTS (monetary)
