@@ -444,33 +444,55 @@ if mode == "Cyber Breach (records-based)":
 # BRANCH 2: AI INCIDENTS (monetary)
 # =====================================================================
 elif mode == "AI Incidents (monetary)":
-        # Lazy import so Cyber mode doesn’t require scikit-learn
+    # Lazy import so Cyber mode doesn’t require scikit-learn
     try:
         from ai_monetary import (
             load_ai_table, fit_severity, fit_frequency,
             scenario_vector, simulate_eal_var, lec_dataframe
         )
-    except Exception as e:
+    except Exception:
         st.error("AI Incidents mode needs scikit-learn. Add 'scikit-learn' to requirements.txt and redeploy.")
         st.stop()
 
     st.header("AI Incidents | Monetary Risk")
     st.caption("AIID incidents enriched with policy context → EAL, VaR95/99, LEC, and ROI.")
 
+    # ⬇️ Use uploads instead of fixed paths
     c1, c2 = st.columns(2)
-    enriched_csv = c1.text_input("Enriched incidents CSV", "/mnt/data/akudaikon_incidents_enriched.csv")
-    hai62_csv    = c2.text_input("HAI 6.2 join-pack CSV", "/mnt/data/akudaikon_joinpack_hai_6_2.csv")
+    enriched_up = c1.file_uploader(
+        "Enriched incidents CSV (required)", type=["csv"], accept_multiple_files=False
+    )
+    hai62_up = c2.file_uploader(
+        "HAI 6.2 join-pack CSV (required)", type=["csv"], accept_multiple_files=False
+    )
+
+    # Guard until both files are present
+    if not enriched_up or not hai62_up:
+        st.info("Upload both CSV files to run this analysis (or switch to *Cyber Breach* mode).")
+        st.stop()
 
     c3, c4, c5 = st.columns(3)
     min_conf = c3.slider("Min loss confidence (for training $ severity)", 0.0, 1.0, 0.70, 0.05)
     trials   = int(c4.selectbox("Monte Carlo trials", [2000, 5000, 10000, 20000], index=2))
     seed     = int(c5.number_input("Random seed", value=42, step=1))
 
-    df_ai = load_ai_table(enriched_csv, hai62_csv)
+    # Pandas can read UploadedFile objects directly
+    try:
+        df_ai = load_ai_table(enriched_up, hai62_up)
+    except Exception as e:
+        st.exception(e)
+        st.stop()
 
-    countries = ["(all)"] + sorted(df_ai["country_group"].dropna().unique().tolist()) if "country_group" in df_ai else ["(all)"]
-    country   = st.selectbox("Country", countries)
-    domains   = st.multiselect("Domains", ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"], default=["finance"])
+    countries = ["(all)"] + (
+        sorted(df_ai["country_group"].dropna().unique().tolist())
+        if "country_group" in df_ai else []
+    )
+    country   = st.selectbox("Country", countries or ["(all)"])
+    domains   = st.multiselect(
+        "Domains",
+        ["finance","healthcare","transport","social_media","hiring_hr","law_enforcement","education"],
+        default=["finance"]
+    )
     mods      = st.multiselect("Modalities", ["vision","nlp","recommender","generative","autonomous"], default=[])
 
     sev_model, sigma = fit_severity(df_ai, min_conf=min_conf)
@@ -484,7 +506,6 @@ elif mode == "AI Incidents (monetary)":
     k2.metric("VaR 95", f"${var95:,.0f}")
     k3.metric("VaR 99", f"${var99:,.0f}")
 
-    # LEC (log-log like your cyber view)
     lec_ai = lec_dataframe(losses)
     fig = px.line(lec_ai, x="loss", y="prob_exceed", title="AI Incidents — Loss Exceedance Curve",
                   labels={"loss": "Loss ($)", "prob_exceed": "P(Loss ≥ x)"})
@@ -497,7 +518,7 @@ elif mode == "AI Incidents (monetary)":
 
     def _ctl_policy_momentum(x):
         for c in [c for c in x.columns if c.startswith("fig_6_2_")]:
-            x[c] = x[c] * 1.10  # assume higher policy activity → lower exposure
+            x[c] = x[c] * 1.10
         return x
 
     def _ctl_deployment_gate(x):
