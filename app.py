@@ -462,6 +462,9 @@ with st.sidebar.form("scenario_form"):
 
     st.caption(f"Selected controls annual cost: ${total_cost(ctrl, costs):,.0f}")
     submitted = st.form_submit_button("Run simulation", type="primary", use_container_width=True)
+if mode == "Cyber Breach (records-based)":
+    # <-- keep EVERYTHING you already have (NAICS presets, shares, the big form, run block, plots) exactly as is.
+    ...
 
 # ---------------------------------------------------------------------
 # Run the simulation once the form is submitted
