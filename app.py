@@ -737,8 +737,8 @@ def run_sensitivity_analysis(cfg, fp, sp, ctrl, costs, param: str, ce=None):
 
     return pd.DataFrame(rows)
 
-            # Sensitivity analysis (lambda)
-            if st.checkbox("Run sensitivity analysis"):
+    # Sensitivity analysis (lambda)
+    if st.checkbox("Run sensitivity analysis"):
                 with st.expander("Sensitivity to Lambda"):
                     base_value = fp.lam
                     variations = [0.5, 0.75, 1.0, 1.25, 1.5]
