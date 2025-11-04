@@ -565,31 +565,57 @@ if mode == "Cyber Breach (records-based)":
                 lam_draws = bayes["lam_samples"]
 
                 # Posterior EAL summaries
-                st.metric(
-                    "EAL (Baseline, Bayesian mean)",
-                    f"${bayes['baseline_eal_mean']:,.0f}",
-                    delta=f"95% CI: [{bayes['baseline_eal_ci'][0]:,.0f}, {bayes['baseline_eal_ci'][1]:,.0f}]"
-                )
-                st.metric(
-                    "EAL (Controlled, Bayesian mean)",
-                    f"${bayes['controlled_eal_mean']:,.0f}",
-                    delta=f"95% CI: [{bayes['controlled_eal_ci'][0]:,.0f}, {bayes['controlled_eal_ci'][1]:,.0f}]"
-                )
-            else:
-                base_losses = simulate_annual_losses(cfg, fp, sp)
-                ctrl_losses = simulate_annual_losses(cfg, fp, sp, ce)
-                lam_draws = None
+               st.markdown("---")
+st.subheader("Sensitivity analysis")
 
-            # Validate
-            base_losses = validate_losses(base_losses, "Baseline")
-            ctrl_losses = validate_losses(ctrl_losses, "Controlled")
+with st.expander("Run sensitivity analysis", expanded=False):
+    st.caption("Vary one frequency parameter ±50% and observe EAL & VaR95.")
+    sens_param = st.selectbox(
+        "Parameter",
+        ["lam", "p_any", "r"],  # incident rate, prob(any loss), NegBin dispersion
+        index=0
+    )
+    include_controls = st.checkbox(
+        "Include current control effects",
+        value=True,
+        help="If checked, sensitivity uses the same control effects as the main run."
+    )
 
-            # Metrics
-            base_m = compute_metrics(base_losses, cfg.net_worth)
-            ctrl_m = compute_metrics(ctrl_losses, cfg.net_worth)
-            ctrl_cost = total_cost(ctrl, costs)
-            delta_eal = base_m["EAL"] - ctrl_m["EAL"]
-            rosi = ((delta_eal - ctrl_cost) / ctrl_cost * 100.0) if ctrl_cost > 0 else np.nan
+    if st.button("Run sensitivity"):
+        try:
+            sens_df = run_sensitivity_analysis(
+                cfg, fp, sp, ctrl, costs, sens_param,
+                ce if include_controls else None
+            )
+
+            fig_s = go.Figure()
+            fig_s.add_scatter(
+                x=sens_df["param_value"], y=sens_df["EAL"],
+                mode="lines+markers", name="EAL"
+            )
+            fig_s.add_scatter(
+                x=sens_df["param_value"], y=sens_df["VaR95"],
+                mode="lines+markers", name="VaR95"
+            )
+            fig_s.update_layout(
+                title=f"Sensitivity of EAL & VaR95 to {sens_param}",
+                xaxis_title=f"{sens_param} value",
+                yaxis_title="USD"
+            )
+            st.plotly_chart(fig_s, use_container_width=True)
+
+            st.dataframe(
+                sens_df.rename(columns={"param_value": f"{sens_param}_value"})
+                      .style.format({
+                          "multiplier": "{:.2f}",
+                          f"{sens_param}_value": "{:,.4f}",
+                          "EAL": "${:,.0f}",
+                          "VaR95": "${:,.0f}",
+                      }),
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error(f"Sensitivity run failed: {e}")
 
             # KPI tiles
             c1, c2, c3, c4 = st.columns(4)
