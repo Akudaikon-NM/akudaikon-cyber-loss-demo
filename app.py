@@ -565,7 +565,7 @@ if mode == "Cyber Breach (records-based)":
                 lam_draws = bayes["lam_samples"]
 
                 # Posterior EAL summaries
-               st.markdown("---")
+st.markdown("---")
 st.subheader("Sensitivity analysis")
 
 with st.expander("Run sensitivity analysis", expanded=False):
