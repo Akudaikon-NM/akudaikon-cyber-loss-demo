@@ -691,6 +691,51 @@ with st.expander("Run sensitivity analysis", expanded=False):
 
             # Distributions
             st.plotly_chart(plot_loss_distributions(base_losses, ctrl_losses), use_container_width=True)
+def run_sensitivity_analysis(cfg, fp, sp, ctrl, costs, param: str, ce=None):
+    """
+    Sensitivity to a single frequency parameter by ±50% in 25% steps.
+    Returns a tidy DataFrame with EAL and VaR95.
+    """
+    base_val = getattr(fp, param, None)
+    if base_val is None:
+        raise ValueError(f"FreqParams has no attribute '{param}'")
+
+    def clamp_param(name, value):
+        if name == "p_any":
+            return float(np.clip(value, 0.0, 1.0))
+        if name == "r":
+            return float(max(1e-6, value))
+        return float(value)
+
+    steps = [0.50, 0.75, 1.00, 1.25, 1.50]
+    rows = []
+    for mult in steps:
+        test_val = clamp_param(param, base_val * mult)
+        fp_test = FreqParams(
+            lam=test_val if param == "lam" else fp.lam,
+            p_any=test_val if param == "p_any" else fp.p_any,
+            negbin=fp.negbin,
+            r=test_val if param == "r" else fp.r
+        )
+        losses = simulate_annual_losses(cfg, fp_test, sp, ce)
+        losses = np.asarray(losses, dtype=float)
+        losses = losses[np.isfinite(losses)]
+        losses = losses[losses >= 0]
+
+        if losses.size == 0:
+            eal = np.nan; v95 = np.nan
+        else:
+            mets = compute_metrics(losses, cfg.net_worth)
+            eal = mets["EAL"]; v95 = mets["VaR95"]
+
+        rows.append({
+            "multiplier": mult,
+            "param_value": test_val,
+            "EAL": eal,
+            "VaR95": v95
+        })
+
+    return pd.DataFrame(rows)
 
             # Sensitivity analysis (lambda)
             if st.checkbox("Run sensitivity analysis"):
