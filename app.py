@@ -132,6 +132,10 @@ Runs a Monte Carlo cyber/AI-loss model to quantify **Expected Annual Loss (EAL)*
 
 *Questions or feature requests? Add them to the issue tracker or email Akudaikon.*
 """)
+# After:
+# st.title("Akudaikon | Cyber-Loss Demo")
+# st.caption("Monte Carlo loss model with control ROI, diagnostics, and optional Bayesian frequency.")
+render_help_panel()
 
 # ---------------------------------------------------------------------
 # App Identity
