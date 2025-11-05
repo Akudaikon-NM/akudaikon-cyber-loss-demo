@@ -24,6 +24,114 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 
+# --- In-app Help Panel ---------------------------------------------------------
+def render_help_panel():
+    with st.expander("❓ Help & User Guide", expanded=False):
+        st.markdown("""
+### What this app does
+Runs a Monte Carlo cyber/AI-loss model to quantify **Expected Annual Loss (EAL)**, **tail risk (VaR95/99)**, **Loss Exceedance Curves (LEC)**, and **Return on Security Investment (ROSI)** under different control combinations. Optionally propagates **Bayesian** uncertainty for incident frequency (λ).
+
+---
+
+### Quick start
+1. Pick **Risk mode** (sidebar): *Cyber Breach (records-based)* or *AI Incidents (monetary)*.  
+2. (Cyber) Optionally apply a **NAICS preset** to seed λ, record cap, $/record, and net worth.  
+3. Set **Scenario** inputs (trials, seed, net worth, records cap, cost/record, λ).  
+4. Toggle **Controls** and set **Control costs**.  
+5. (Optional) In **Advanced frequency**, provide (k, T) and enable **Bayesian lambda**; or enable **Negative Binomial** for overdispersion.  
+6. Click **Run simulation** and review KPIs, charts, sensitivity, and downloads.
+
+---
+
+### Inputs (sidebar)
+**Risk mode**
+- *Cyber Breach (records-based)*: severity ≈ (fraction of customers) × ($/record), capped by records; controls can alter frequency, breach-any probability, and tail severity.
+- *AI Incidents (monetary)*: trains frequency/severity from AI incident data (uploaded or demo); outputs monetary losses directly.
+
+**Finance NAICS presets (Cyber)**
+- Pre-fills: **λ**, **records cap**, **$ per record**, **net worth** for representative finance sub-sectors. You can still edit values after applying.
+
+**Scenario**
+- **Simulation trials**: number of Monte Carlo runs (e.g., 50k). More trials → more stable tail estimates; higher compute.
+- **Random seed**: reproducibility.
+- **Net worth (USD)**: used for VaR/Net Worth ratios.
+- **Records / customers cap**: upper bound on exposed records per year.
+- **Cost per record (USD)**: unit severity cost when records are breached.
+- **Annual incident rate (λ)**: expected number of incidents per year.
+
+**Controls + Control costs**
+- Toggles: **Server**, **Media**, **Error**, **External**.
+- Costs: annual spend per control; used in **ROSI**.
+- Effects are **data-driven** using ACTION/PATTERN shares with **diminishing returns** and **floors** to avoid unrealistic zero-risk.
+
+**Data-driven control effects (shares)**
+- Use built-in demo shares (NAICS-52-like) or upload 2 CSVs of shares by **ACTION** and **PATTERN**.
+- These shares weight how each control reduces **λ / P(any loss)** (ACTION) and **tail severity** (PATTERN).
+
+**Advanced frequency**
+- **Bayesian lambda (Gamma prior + your data)**:
+  - Prior: **α₀, β₀** (Gamma); Data: **k incidents** over **T years**.
+  - Button suggests α₀ = λ̂·w, β₀ = w from **λ̂ = k/T** and pseudo-years **w**.
+  - When enabled, the app **draws λ** from the posterior and re-runs the model many times, producing EAL/LEC with credible variation.
+- **Negative Binomial (overdispersion)**:
+  - Enable `Use Negative Binomial`; set dispersion **r** (smaller r → heavier variance than Poisson).
+
+---
+
+### Outputs (main area)
+**KPIs**
+- **EAL (Baseline / Controlled)**: mean annual loss with and without controls; delta shows reduction.
+- **VaR95 / VaR99 (Base → Ctrl)**: 95th/99th percentile annual loss; deltas show tail risk reduction.
+- **VaR/Net Worth**: risk as a % of capital.
+- **ROSI**: \\( \\, \\frac{\\Delta EAL - \\text{Control Cost}}{\\text{Control Cost}} \\times 100\\% \\, \\)** (annualized heuristic).
+
+**Convergence & Diagnostics**
+- Convergence check via **batch CV**; if high, increase trials.
+- Diagnostics: **ESS**, **tail mass**, **zero-loss ratio**, **MC SE(EAL)**, **relative error**.
+
+**Loss Exceedance Curve (LEC)**
+- Plots \\( P(\\text{Loss} \\ge x) \\) vs **x** (log–log).  
+- If Bayesian enabled: shows **credible bands** around LECs from posterior λ draws.
+
+**Distribution comparison**
+- Overlaid histograms (log-x) for Baseline vs Controlled annual loss distributions.
+
+**Sensitivity analysis (one at a time)**
+- Varies **λ**, **P(any)**, or **r** by ±50% in 25% steps; plots impact on **EAL** and **VaR95**.
+
+**Multi-year horizon**
+- Simulates cumulative losses over 1–10 years and reports final-year **VaR95**.
+
+**Scenario comparer (16 combos)**
+- Evaluates all control combinations; shows **EAL**, **VaR95**, **cost**, and a ROSI ranking.
+
+**Downloads**
+- **Annual losses (CSV)** for Baseline and Controlled.
+- **Full JSON report** with configuration, metrics, diagnostics, and loss samples.
+
+---
+
+### How inputs relate to outputs
+- **λ (frequency)** ↑ ⇒ more events per year ⇒ **EAL**, **VaR95/99**, and LEC tail ↑.
+- **P(any loss)** ↑ ⇒ higher chance an event produces loss ⇒ **EAL** ↑.
+- **Records cap** / **$ per record** ↑ ⇒ larger severities ⇒ **EAL** and **VaR95/99** ↑.
+- **Controls**:
+  - **Server / External** mostly reduce **λ** and **P(any)** (via ACTION shares).
+  - **Media / Server** can reduce **tail severity** (via PATTERN shares).
+  - **Diminishing returns** and **floors** enforce realistic, non-zero residual risk.
+- **Negative Binomial r** ↓ ⇒ more overdispersion ⇒ fatter tail ⇒ **VaR95/99** ↑.
+- **Bayesian λ**: uncertainty in **λ** propagates to **EAL/LEC**; you’ll see credible spread, not just point estimates.
+
+---
+
+### Tips
+- For board demos, start with **NAICS preset**, 50k trials, then toggle controls to show **delta EAL** and **VaR** shifts.
+- If **Relative Error (EAL) > 5%** or convergence CV is high, increase trials.
+- Use **Sensitivity** to show which parameter most drives tail risk for your audience.
+- **ROSI** is a heuristic here; you can replace its formula to match your CFO’s standard.
+
+*Questions or feature requests? Add them to the issue tracker or email Akudaikon.*
+""")
 
 # ---------------------------------------------------------------------
 # App Identity
