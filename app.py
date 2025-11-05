@@ -462,28 +462,80 @@ def run_sensitivity_analysis(cfg, fp, sp, param: str, ce=None):
 
     return pd.DataFrame(rows)
 
-def plot_loss_distributions(base_losses: np.ndarray, ctrl_losses: np.ndarray) -> go.Figure:
+def plot_loss_distributions(base_losses, ctrl_losses):
     """
-    Overlay histograms of annual losses (log-x) for Baseline vs Controlled.
-    Filters to positive, finite values for plotting.
+    Plot loss distributions on a log scale by pre-transforming the data.
+    Avoids the paper-thin bar problem of applying log scale after binning.
     """
     base = np.asarray(base_losses, dtype=float)
     ctrl = np.asarray(ctrl_losses, dtype=float)
-
+    
+    # Filter to finite positive losses only
     base = base[np.isfinite(base) & (base > 0)]
     ctrl = ctrl[np.isfinite(ctrl) & (ctrl > 0)]
-
+    
+    if len(base) == 0 or len(ctrl) == 0:
+        # Return empty figure with message if no valid data
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No positive losses to display",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16)
+        )
+        return fig
+    
+    # Transform to log10 space for proper binning
+    base_log = np.log10(base)
+    ctrl_log = np.log10(ctrl)
+    
+    # Create histogram with reasonable number of bins
     fig = go.Figure()
-    fig.add_trace(go.Histogram(x=base, name="Baseline", opacity=0.6, nbinsx=50))
-    fig.add_trace(go.Histogram(x=ctrl, name="Controlled", opacity=0.6, nbinsx=50))
+    fig.add_trace(go.Histogram(
+        x=base_log, 
+        name="Baseline", 
+        opacity=0.6, 
+        nbinsx=50,
+        marker_color='#1f77b4'
+    ))
+    fig.add_trace(go.Histogram(
+        x=ctrl_log, 
+        name="Controlled", 
+        opacity=0.6, 
+        nbinsx=50,
+        marker_color='#ff7f0e'
+    ))
+    
+    # Configure layout
     fig.update_layout(
-        title="Loss Distribution Comparison (log scale)",
+        title="Loss Distribution Comparison (log₁₀ scale)",
         barmode="overlay",
         xaxis_title="Annual Loss (USD)",
         yaxis_title="Frequency",
-        legend_title_text=""
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99
+        ),
+        hovermode='x unified'
     )
-    fig.update_xaxes(type="log")
+    
+    # Create nice 10^k tick labels
+    lo = np.floor(min(base_log.min(), ctrl_log.min()))
+    hi = np.ceil(max(base_log.max(), ctrl_log.max()))
+    tickvals = np.arange(lo, hi + 1)
+    ticktext = [f"${10**int(t):,.0f}" for t in tickvals]  # Format as currency
+    
+    fig.update_xaxes(
+        tickvals=tickvals,
+        ticktext=ticktext,
+        gridcolor='rgba(128,128,128,0.2)'
+    )
+    fig.update_yaxes(
+        gridcolor='rgba(128,128,128,0.2)'
+    )
+    
     return fig
 
 # ---------------------------------------------------------------------
