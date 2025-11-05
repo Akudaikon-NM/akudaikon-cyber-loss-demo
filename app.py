@@ -60,7 +60,7 @@ Runs a Monte Carlo cyber/AI-loss model to quantify **Expected Annual Loss (EAL)*
 - **Annual incident rate (λ)**: expected number of incidents per year.
 
 **Controls + Control costs**
-- Toggles: **Server**, **Media**, **Error**, **External**.
+- Toggles: **Server hardening/patching: CIS 4, 7, 12, 10, 8**, **Media/DLP: CIS 3, 4, 6, 11, 15, 8**, **Change control/error-proofing: CIS 4, 16, 7, 8, 12/13, 5, 17**, **External/MFA & perimeter: CIS 6, 5, 12, 13, 9, 10, 16, 15, 8**.
 - Costs: annual spend per control; used in **ROSI**.
 - Effects are **data-driven** using ACTION/PATTERN shares with **diminishing returns** and **floors** to avoid unrealistic zero-risk.
 
