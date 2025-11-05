@@ -23,6 +23,8 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+# --- Streamlit page config must run before any other Streamlit command
+st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 
 # --- In-app Help Panel ---------------------------------------------------------
 def render_help_panel():
