@@ -462,6 +462,29 @@ def run_sensitivity_analysis(cfg, fp, sp, param: str, ce=None):
 
     return pd.DataFrame(rows)
 
+def plot_loss_distributions(base_losses: np.ndarray, ctrl_losses: np.ndarray) -> go.Figure:
+    """
+    Overlay histograms of annual losses (log-x) for Baseline vs Controlled.
+    Filters to positive, finite values for plotting.
+    """
+    base = np.asarray(base_losses, dtype=float)
+    ctrl = np.asarray(ctrl_losses, dtype=float)
+
+    base = base[np.isfinite(base) & (base > 0)]
+    ctrl = ctrl[np.isfinite(ctrl) & (ctrl > 0)]
+
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=base, name="Baseline", opacity=0.6, nbinsx=50))
+    fig.add_trace(go.Histogram(x=ctrl, name="Controlled", opacity=0.6, nbinsx=50))
+    fig.update_layout(
+        title="Loss Distribution Comparison (log scale)",
+        barmode="overlay",
+        xaxis_title="Annual Loss (USD)",
+        yaxis_title="Frequency",
+        legend_title_text=""
+    )
+    fig.update_xaxes(type="log")
+    return fig
 
 # ---------------------------------------------------------------------
 # Distributions & scenarios
