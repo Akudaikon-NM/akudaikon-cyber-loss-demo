@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Union
 
-# Public API surface exported by this module
 __all__ = [
     "ControlSet",
     "ControlCosts",
+    "CostTCO",
+    "annualized_cost",
     "prob_multiplier",
     "severity_multiplier",
     "control_effects",
@@ -20,50 +21,92 @@ __all__ = [
 
 @dataclass(frozen=True)
 class ControlSet:
-    """
-    Toggle which control families are active in the portfolio.
-
-    server   : hardening/patching, config baselines
-    media    : encryption/DLP/handling that primarily bends the tail
-    error    : change/config discipline (reduces blunders/misconfigs)
-    external : identity/MFA and perimeter-facing reductions
-    """
     server: bool = False
     media: bool = False
     error: bool = False
     external: bool = False
 
+# --- NEW: rich TCO structure (optional) ---
+@dataclass(frozen=True)
+class CostTCO:
+    # One-time (amortized)
+    impl: float = 0.0           # implementation / PS
+    hw: float = 0.0             # hardware / appliance
+    training: float = 0.0
+    impl_years: int = 3
+    hw_years: int = 4
+    training_years: int = 2
+    discount_rate: float = 0.08
+
+    # Recurring (opex)
+    license_annual: float = 0.0
+    cloud_annual: float = 0.0
+    staff_fte: float = 0.0
+    loaded_rate: float = 180_000.0  # fully loaded per FTE per year
+    siem_gb_day: float = 0.0
+    siem_cost_per_gb_day: float = 0.0
+    other_annual: float = 0.0
+
+    # Offsets (subtract)
+    retired_annual: float = 0.0
+
+    # Shared/platform allocation (portion of a shared platform $/yr)
+    platform_alloc_annual: float = 0.0
+
+def _annuity(pv: float, r: float, n: int) -> float:
+    n = max(1, int(n))
+    if r <= 0:
+        return pv / n
+    f = (1.0 + r) ** n
+    return pv * (r * f) / (f - 1.0)
+
+def annualized_cost(c: Union[float, CostTCO]) -> float:
+    """Return annualized $ whether `c` is a plain annual number or a TCO bundle."""
+    if isinstance(c, (int, float)):
+        return float(c)
+    if not isinstance(c, CostTCO):
+        return 0.0
+
+    one_time = (
+        _annuity(c.impl,     c.discount_rate, c.impl_years) +
+        _annuity(c.hw,       c.discount_rate, c.hw_years) +
+        _annuity(c.training, c.discount_rate, c.training_years)
+    )
+    recurring = (
+        c.license_annual +
+        c.cloud_annual +
+        c.staff_fte * c.loaded_rate +
+        c.siem_gb_day * c.siem_cost_per_gb_day * 365.0 +
+        c.other_annual +
+        c.platform_alloc_annual
+    )
+    return max(0.0, one_time + recurring - c.retired_annual)
 
 @dataclass(frozen=True)
 class ControlCosts:
     """
-    Annualized costs for each control family (USD/year).
+    Annualized costs for each control family.
+    You may pass either a plain annual number (float) or a CostTCO.
     """
-    server: float = 0.0
-    media: float = 0.0
-    error: float = 0.0
-    external: float = 0.0
-
+    server:   Union[float, CostTCO] = 0.0
+    media:    Union[float, CostTCO] = 0.0
+    error:    Union[float, CostTCO] = 0.0
+    external: Union[float, CostTCO] = 0.0
 
 # ---------------------------
 # Tunable effect constants
 # ---------------------------
-# Likelihood multipliers applied to lambda (and Poisson-like frequency).
+
 _LIKELIHOOD_MULT: Dict[str, float] = {
-    "external": 0.75,  # MFA / external attack surface
-    "server":   0.85,  # patching / hardening
-    "error":    0.90,  # change control / guardrails
-    # "media" is omitted here (severity-focused)
+    "external": 0.75,
+    "server":   0.85,
+    "error":    0.90,
 }
 
-# Scalar multiplier applied to severity (non-parametric fallback).
 _SEVERITY_MULT: Dict[str, float] = {
-    "media": 0.80,  # encryption/DLP bends the tail
+    "media": 0.80,
 }
 
-# Spliced/causal model parameter multipliers:
-# - p_any controls the chance of any loss mass in a year
-# - gpd_scale bends the tail in the extreme-value component
 _P_ANY_MULT: Dict[str, float] = {
     "external": 0.85,
     "error":    0.95,
@@ -73,16 +116,11 @@ _GPD_SCALE_MULT: Dict[str, float] = {
     "media": 0.70,
 }
 
-
 # ---------------------------
 # Backward-compatible helpers
 # ---------------------------
 
 def prob_multiplier(ctrl: ControlSet) -> float:
-    """
-    Backward-compatible: collapse active controls to a single lambda multiplier.
-    Media is excluded since it primarily affects severity tails.
-    """
     mult = 1.0
     if ctrl.external:
         mult *= _LIKELIHOOD_MULT["external"]
@@ -92,32 +130,18 @@ def prob_multiplier(ctrl: ControlSet) -> float:
         mult *= _LIKELIHOOD_MULT["error"]
     return mult
 
-
 def severity_multiplier(ctrl: ControlSet) -> float:
-    """
-    Backward-compatible: collapse active controls to a single scalar
-    applied to severity draws.
-    """
     mult = 1.0
     if ctrl.media:
         mult *= _SEVERITY_MULT["media"]
     return mult
-
 
 # ---------------------------
 # Causal effects for spliced model
 # ---------------------------
 from engine import ControlEffects  # keep import here to avoid circulars during type checking
 
-
 def control_effects(ctrl: ControlSet) -> ControlEffects:
-    """
-    Map a ControlSet to parameter-level causal effects used by the spliced model.
-    Returns an engine.ControlEffects with:
-      - lam_mult      : frequency (lambda) multiplier
-      - p_any_mult    : probability of any-loss-in-year multiplier
-      - gpd_scale_mult: tail scale multiplier (extreme-value severity)
-    """
     lam_mult = prob_multiplier(ctrl)
 
     p_any_mult = 1.0
@@ -136,18 +160,14 @@ def control_effects(ctrl: ControlSet) -> ControlEffects:
         gpd_scale_mult=gpd_scale_mult,
     )
 
-
 def total_cost(ctrl: ControlSet, costs: ControlCosts) -> float:
-    """
-    Sum annualized costs for the active control portfolio.
-    """
     total = 0.0
     if ctrl.server:
-        total += costs.server
+        total += annualized_cost(costs.server)
     if ctrl.media:
-        total += costs.media
+        total += annualized_cost(costs.media)
     if ctrl.error:
-        total += costs.error
+        total += annualized_cost(costs.error)
     if ctrl.external:
-        total += costs.external
+        total += annualized_cost(costs.external)
     return total
