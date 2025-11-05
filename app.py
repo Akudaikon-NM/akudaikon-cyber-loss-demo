@@ -464,22 +464,21 @@ def run_sensitivity_analysis(cfg, fp, sp, param: str, ce=None):
 # ---------------------------------------------------------------------
 # Distributions & scenarios
 # ---------------------------------------------------------------------
-def plot_loss_distributions(base_losses, ctrl_losses):
-    fig = go.Figure()
-    fig.add_trace(go.Histogram(
-        x=base_losses[base_losses > 0], name="Baseline", opacity=0.6, nbinsx=50
-    ))
-    fig.add_trace(go.Histogram(
-        x=ctrl_losses[ctrl_losses > 0], name="Controlled", opacity=0.6, nbinsx=50
-    ))
-    fig.update_xaxes(type="log", title="Annual Loss (USD)")
-    fig.update_yaxes(title="Frequency")
-    fig.update_layout(barmode='overlay', title="Loss Distribution Comparison (log scale)")
-    return fig
-
 def compare_control_scenarios(cfg, fp, sp, costs, action_shares, pattern_shares):
+    """
+    Compare all 16 control combinations (2^4) and compute proper ROSI.
+    ROSI = (Delta_EAL - Control_Cost) / Control_Cost * 100%
+    where Delta_EAL = Baseline_EAL - Controlled_EAL (risk reduction).
+    """
     scenarios = []
     control_names = ['server','media','error','external']
+
+    # Baseline (no controls)
+    base_losses = simulate_annual_losses(cfg, fp, sp)
+    base_losses = validate_losses(base_losses, "Baseline for comparison")
+    base_metrics = compute_metrics(base_losses, cfg.net_worth)
+    baseline_eal = base_metrics["EAL"]
+
     for i in range(16):
         ctrl = ControlSet(
             server=(i & 1) > 0,
@@ -491,21 +490,38 @@ def compare_control_scenarios(cfg, fp, sp, costs, action_shares, pattern_shares)
             ce = effects_from_shares_improved(ctrl, action_shares, pattern_shares)
         except Exception:
             ce = control_effects(ctrl)
+
+        # (Optional CRN) -> seed=cfg.seed + i
         losses = simulate_annual_losses(cfg, fp, sp, ce)
-        losses = validate_losses(losses, "Scenario")
+        losses = validate_losses(losses, f"Scenario {i}")
         metrics = compute_metrics(losses, cfg.net_worth)
         cost = total_cost(ctrl, costs)
+
+        delta_eal = baseline_eal - metrics["EAL"]  # risk reduction
+
+        if cost > 0:
+            rosi = ((delta_eal - cost) / cost) * 100.0
+            delta_per_dollar = (delta_eal / cost)
+        else:
+            rosi = np.nan
+            delta_per_dollar = np.nan
+
         active = [name for j, name in enumerate(control_names) if (i & (1 << j)) > 0]
-        # ROSI here is a simple EAL delta vs cost proxy; you can swap for your preferred ROSI
         scenarios.append({
             "scenario": " + ".join(active) if active else "None",
             "n_controls": len(active),
+            "server": ctrl.server, "media": ctrl.media, "error": ctrl.error, "external": ctrl.external,
             "EAL": metrics["EAL"],
             "VaR95": metrics["VaR95"],
+            "VaR99": metrics["VaR99"],
             "cost": cost,
-            "ROSI": ((metrics["EAL"] - cost) / cost * 100.0) if cost > 0 else np.nan
+            "Delta_EAL": delta_eal,
+            "DeltaEAL_per_$": delta_per_dollar,
+            "ROSI_%": rosi
         })
-    return pd.DataFrame(scenarios).sort_values("ROSI", ascending=False)
+
+    df = pd.DataFrame(scenarios)
+    return df.sort_values("ROSI_%", ascending=False, na_position="last")
 
 
 # ---------------------------------------------------------------------
