@@ -1,3 +1,24 @@
+# Data files (but allow sample/fixture data)
+*.csv
+*.json
+!fixtures/*.json
+!examples/*.csv
+# ================================
+# 🔹 TESTING
+# ================================
+.pytest_cache/
+.tox/
+*.cover
+
+# ================================
+# 🔹 SECRETS & CREDENTIALS
+# ================================
+*.pem
+*.key
+.env.local
+.env.*.local
+credentials.json
+secrets.yaml
 # ================================
 # 🔹 PYTHON & BUILD ARTIFACTS
 # ================================
@@ -5,8 +26,14 @@ __pycache__/
 *.py[cod]
 *.so
 *.egg-info/
+*.egg
+.eggs/
 build/
 dist/
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
 
 # ================================
 # 🔹 VIRTUAL ENVIRONMENTS
@@ -70,4 +97,6 @@ logs/
 .coverage
 htmlcov/
 profiler/
-
+# Create a README to explain the data structure
+echo "# Data Directory\nPlace your data files here..." > data/README.md
+git add data/README.md -f
