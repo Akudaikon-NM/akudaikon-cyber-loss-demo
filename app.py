@@ -794,11 +794,11 @@ with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
 - **Media encryption** primarily helps with physical asset loss patterns.
 - **Control isolation** shows standalone value; **marginal ROI** shows incremental value from current bundle.
 """)
-                fp_account = FreqParams(lam=account_lam, p_any=account_p_any, 
-                                       negbin=fp.negbin, r=fp.r)
+fp_account = FreqParams(lam=account_lam, p_any=account_p_any, 
+negbin=fp.negbin, r=fp.r)
                 
-                losses_account = cached_simulate(asdict(cfg_account), asdict(fp_account), 
-                                                asdict(sp))
+losses_account = cached_simulate(asdict(cfg_account), asdict(fp_account), 
+asdict(sp))
                 metrics_account = compute_metrics(losses_account, account_net_worth)
                 
                 results.append({
