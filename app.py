@@ -827,35 +827,6 @@ with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
 - **Media encryption** primarily helps with physical asset loss patterns.
 - **Control isolation** shows standalone value; **marginal ROI** shows incremental value from current bundle.
 """)
-fp_account = FreqParams(lam=account_lam, p_any=account_p_any, 
-negbin=fp.negbin, r=fp.r)
-                
-losses_account = cached_simulate(asdict(cfg_account), asdict(fp_account), 
-asdict(sp))
-                metrics_account = compute_metrics(losses_account, account_net_worth)
-                
-                results.append({
-                    'account_id': account_id,
-                    'EAL': metrics_account['EAL'],
-                    'VaR95': metrics_account['VaR95'],
-                    'VaR99': metrics_account['VaR99'],
-                    'P(Ruin)': metrics_account['P(Ruin)']
-                })
-                
-                progress_bar.progress((idx + 1) / len(df))
-            
-            results_df = pd.DataFrame(results)
-            st.success("✓ Portfolio analysis complete!")
-            st.dataframe(results_df, use_container_width=True)
-            
-            # Download results
-            csv = results_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Results CSV",
-                data=csv,
-                file_name="portfolio_results.csv",
-                mime="text/csv"
-            )
 
 # ============================================================================
 # EXPORT CONFIGURATION
