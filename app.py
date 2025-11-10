@@ -319,6 +319,11 @@ def log_hist_figure(losses, title):
     fig.update_xaxes(tickvals=ticks, ticktext=[f"${10**int(t):,.0f}" for t in ticks])
     return fig
 
+def _stable_seed_from(s: str, base: int = 0):
+    """Generate consistent seed from string ID."""
+    # consistent tiny hash → [0, 9999]
+    return base + (abs(hash(str(s))) % 10000)
+
 def _normalize_shares(shares: dict) -> dict:
     """Normalize shares to sum to 1."""
     total = sum(shares.values())
@@ -370,6 +375,12 @@ st.sidebar.dataframe(
     hide_index=True
 )
 
+# Reset button for shares
+if st.sidebar.button("🔄 Reset action/pattern shares to defaults"):
+    st.session_state.pop("_action_shares", None)
+    st.session_state.pop("_pattern_shares", None)
+    st.rerun()
+
 # Model configuration
 with st.sidebar.expander("🎲 Simulation Config", expanded=True):
     trials = st.number_input("Monte Carlo Trials", 1000, 100000, 10000, 1000)
@@ -384,6 +395,9 @@ with st.sidebar.expander("📊 Frequency Parameters", expanded=True):
     p_any = st.slider("P(any loss | incident)", 0.1, 0.95, 0.7, 0.05)
     negbin = st.checkbox("Use Negative Binomial", value=False)
     r = st.number_input("NegBin dispersion (r)", 0.5, 10.0, 1.0, 0.5) if negbin else 1.0
+    
+    if negbin:
+        st.caption("ℹ️ Lower r ⇒ more over-dispersion (fatter frequency tails).")
     
     # Validation warnings
     if p_any < 0.1 or p_any > 0.95:
@@ -550,10 +564,12 @@ with col2:
 with col3:
     control_cost = costs.total()
     delta_eal = base_metrics['EAL'] - ctrl_metrics['EAL']
-    rosi = ((delta_eal - control_cost) / control_cost * 100) if control_cost > 0 else 0
+    net_benefit = delta_eal - control_cost
+    rosi = (net_benefit / control_cost * 100) if control_cost > 0 else 0
     
     st.metric("Control Cost", f"${control_cost:,.0f}")
-    st.metric("ROSI", f"{rosi:.1f}%", delta=f"${delta_eal - control_cost:,.0f} net benefit")
+    st.metric("ΔEAL (Risk ↓)", f"${delta_eal:,.0f}")
+    st.metric("ROSI", f"{rosi:.1f}%", delta=f"${net_benefit:,.0f} net benefit")
 
 # Detailed metrics table
 summary_data = {
@@ -625,10 +641,17 @@ st.dataframe(
     use_container_width=True
 )
 
-# Find best ROSI
-best_idx = iso_df['ROSI %'].idxmax()
-best = iso_df.loc[best_idx]
-st.success(f"🏆 Best ROSI: {best['Control']} ({best['ROSI %']:.1f}%)")
+# Download isolation results
+iso_csv = iso_df.to_csv(index=False).encode("utf-8")
+st.download_button("📥 Download Isolation ROI (CSV)", iso_csv, "isolation_roi.csv", "text/csv")
+
+# Find best ROSI (safe for all-NaN)
+if iso_df['ROSI %'].notna().any():
+    best_idx = iso_df['ROSI %'].idxmax()
+    best = iso_df.loc[best_idx]
+    st.success(f"🏆 Best ROSI: {best['Control']} ({best['ROSI %']:.1f}%)")
+else:
+    st.info("Set non-zero control costs to compute ROSI (currently all costs are $0).")
 
 # ============================================================================
 # MARGINAL ROI ANALYSIS
@@ -675,6 +698,10 @@ if marg:
         }),
         use_container_width=True
     )
+    
+    # Download marginal results
+    marg_csv = marg_df.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download Marginal ROI (CSV)", marg_csv, "marginal_roi.csv", "text/csv")
 else:
     st.info("All controls are already selected; no marginal adds to evaluate.")
 
@@ -695,7 +722,14 @@ fig_lec = px.line(lec_combined, x="Loss", y="Exceedance_Prob", color="scenario",
                   labels={"Loss": "Loss Amount ($)", "Exceedance_Prob": "P(Loss ≥ x)"})
 fig_lec.update_xaxes(type="log")
 fig_lec.update_yaxes(type="log", range=[-2.5, 0])
+fig_lec.add_hline(y=0.01, line_dash="dot", opacity=0.2)
+fig_lec.add_hline(y=0.001, line_dash="dot", opacity=0.2)
 st.plotly_chart(fig_lec, use_container_width=True)
+
+# Download LEC data
+lec_export = lec_combined.rename(columns={"scenario": "Scenario"})
+lec_csv = lec_export.to_csv(index=False).encode("utf-8")
+st.download_button("📥 Download LEC Points (CSV)", lec_csv, "lec_points.csv", "text/csv")
 
 # Histograms
 col1, col2 = st.columns(2)
@@ -738,8 +772,28 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
                 account_p_any = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
                 
                 # Run simulation for this account
-                cfg_account = ModelConfig(trials=cfg.trials, net_worth=account_net_worth, 
-                                         seed=cfg.seed + idx)
+                cfg_account = ModelConfig(
+                    trials=cfg.trials, 
+                    net_worth=account_net_worth, 
+                    seed=_stable_seed_from(account_id, base=cfg.seed)
+                )
+
+# ============================================================================
+# SANITY CHECK GUIDE
+# ============================================================================
+
+with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
+    st.markdown("""
+**Expected Behaviors:**
+
+- Turning **External monitoring** on should drop **λ** and modestly shrink tails.
+- Increasing **σ** raises **VaR95/99** more than **EAL** (fatter body/tail).
+- With **NegBin**, lowering **r** raises tail risk more than mean frequency.
+- **ξ ≥ 1** ⇒ infinite mean tail; keep **ξ < 0.5** for realistic cyber losses.
+- **Server hardening** should have strongest effect when hacking/web app patterns dominate.
+- **Media encryption** primarily helps with physical asset loss patterns.
+- **Control isolation** shows standalone value; **marginal ROI** shows incremental value from current bundle.
+""")
                 fp_account = FreqParams(lam=account_lam, p_any=account_p_any, 
                                        negbin=fp.negbin, r=fp.r)
                 
