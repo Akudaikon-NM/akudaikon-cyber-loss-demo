@@ -245,6 +245,7 @@ def lec(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
     # For each grid x, find first index >= x via binary search
     idx = np.searchsorted(losses, grid, side='left')
     ex_prob = 1.0 - idx / float(len(losses))
+    ex_prob = np.clip(ex_prob, 1.0/len(losses), 1.0)  # keep strictly positive
     
     return pd.DataFrame({"Loss": grid, "Exceedance_Prob": ex_prob})
 
@@ -254,27 +255,52 @@ def cached_lec(losses, n):
     return lec(losses, n=n)
 
 def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_shares: dict) -> ControlEffects:
-    """Compute control effects from action/pattern shares."""
-    # Simple mapping for demo - would be more sophisticated in production
+    """Compute control effects from action/pattern shares with data-driven heuristics."""
+    # Normalize inputs
+    a = _normalize_shares(action_shares)
+    p = _normalize_shares(pattern_shares)
+    
+    # Base multipliers
     lam_mult = 1.0
     p_any_mult = 1.0
     gpd_mult = 1.0
     
+    # Heuristic weights by channel
+    hack_intensity = a.get("hacking", 0) + p.get("Web Applications", 0) + p.get("Crimeware", 0)
+    misuse_intensity = a.get("misuse", 0) + p.get("Privilege Misuse", 0)
+    error_intensity = a.get("error", 0) + p.get("Miscellaneous Errors", 0)
+    physical_int = a.get("physical", 0) + p.get("Lost and Stolen Assets", 0)
+    
     if ctrl.server:
-        lam_mult *= 0.7
-        p_any_mult *= 0.8
-        gpd_mult *= 0.9
+        lam_mult *= (1 - 0.35 * hack_intensity)      # frequency reduction on hack/web
+        p_any_mult *= (1 - 0.20 * hack_intensity)
+        gpd_mult *= (1 - 0.15 * hack_intensity)
     if ctrl.media:
-        lam_mult *= 0.8
-        p_any_mult *= 0.85
+        lam_mult *= (1 - 0.25 * physical_int)        # fewer "loss with data" events
+        p_any_mult *= (1 - 0.25 * physical_int)
     if ctrl.error:
-        lam_mult *= 0.9
-        p_any_mult *= 0.9
+        lam_mult *= (1 - 0.20 * error_intensity)
+        p_any_mult *= (1 - 0.25 * error_intensity)
     if ctrl.external:
-        lam_mult *= 0.85
-        gpd_mult *= 0.85
+        lam_mult *= (1 - 0.30 * (hack_intensity + misuse_intensity))  # detect/contain earlier
+        gpd_mult *= (1 - 0.20 * (hack_intensity + misuse_intensity))  # shorter tails
+    
+    # Keep within [0.2, 1.0] to avoid pathological extremes in demos
+    lam_mult = float(np.clip(lam_mult, 0.2, 1.0))
+    p_any_mult = float(np.clip(p_any_mult, 0.2, 1.0))
+    gpd_mult = float(np.clip(gpd_mult, 0.2, 1.0))
     
     return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_mult)
+
+def eal_ci(losses: np.ndarray, n_boot: int = 1000, alpha: float = 0.95):
+    """Bootstrap confidence interval for EAL."""
+    m = len(losses)
+    boots = np.mean(
+        np.random.choice(losses, size=(n_boot, m), replace=True),
+        axis=1
+    )
+    lo, hi = np.percentile(boots, [(1-alpha)/2*100, (1+alpha)/2*100])
+    return float(np.mean(losses)), float(lo), float(hi)
 
 def log_hist_figure(losses, title):
     """Create histogram with log-scaled x-axis."""
@@ -413,6 +439,10 @@ if sp.gpd_shape >= 1.0:
 if sp.sigma > 2.5:
     st.sidebar.warning("⚠️ Lognormal σ is quite high; body may dominate and inflate EAL/VaR.")
 
+# Advanced confidence interval settings
+with st.sidebar.expander("📐 Confidence Intervals (advanced)", expanded=False):
+    n_boot = st.slider("Bootstrap reps for VaR/EAL CI", 100, 5000, 1000, 100)
+
 # Controls
 with st.sidebar.expander("🛡️ Control Selection", expanded=True):
     server = st.checkbox("Server hardening", value=False)
@@ -442,6 +472,9 @@ for k in ["server", "media", "error", "external"]:
 # ============================================================================
 # MAIN SIMULATION
 # ============================================================================
+
+# Generate control effects (must be before Assumption Summary)
+ce = effects_from_shares_improved(ctrl, action_shares, pattern_shares)
 
 st.header("🎯 Simulation Results")
 
@@ -475,9 +508,6 @@ with st.expander("📋 Assumption Summary", expanded=False):
         st.markdown(f"- Net worth: `${cfg.net_worth:,.0f}`")
         st.markdown(f"- Random seed: `{cfg.seed}`")
 
-# Generate control effects
-ce = effects_from_shares_improved(ctrl, action_shares, pattern_shares)
-
 # Run simulations with caching
 base_losses = cached_simulate(asdict(cfg), asdict(fp), asdict(sp))
 ctrl_losses = cached_simulate(asdict(cfg), asdict(fp), asdict(sp), asdict(ce))
@@ -491,12 +521,18 @@ st.caption(f"📊 Applied control multipliers → λ×{ce.lam_mult:.2f}, "
           f"P(any)×{ce.p_any_mult:.2f}, tail-scale×{ce.gpd_scale_mult:.2f}")
 
 # VaR confidence intervals
-var95_base = var_confidence_interval(base_losses, 0.95)
-var95_ctrl = var_confidence_interval(ctrl_losses, 0.95)
+var95_base = var_confidence_interval(base_losses, 0.95, n_boot=n_boot)
+var95_ctrl = var_confidence_interval(ctrl_losses, 0.95, n_boot=n_boot)
 st.caption(f"📈 VaR95: Base ${var95_base['point']:,.0f} "
           f"(±{(var95_base['ci_upper']-var95_base['ci_lower'])/2:,.0f}) | "
           f"Ctrl ${var95_ctrl['point']:,.0f} "
           f"(±{(var95_ctrl['ci_upper']-var95_ctrl['ci_lower'])/2:,.0f})")
+
+# EAL confidence intervals
+eal_b, eal_lo_b, eal_hi_b = eal_ci(base_losses, n_boot=n_boot)
+eal_c, eal_lo_c, eal_hi_c = eal_ci(ctrl_losses, n_boot=n_boot)
+st.caption(f"📊 EAL CI: Base ${eal_b:,.0f} [{eal_lo_b:,.0f}, {eal_hi_b:,.0f}] | "
+           f"Ctrl ${eal_c:,.0f} [{eal_lo_c:,.0f}, {eal_hi_c:,.0f}]")
 
 # Summary table
 col1, col2, col3 = st.columns(3)
@@ -549,14 +585,20 @@ st.caption("Individual control effectiveness (all others off)")
 
 baseline_eal = base_metrics['EAL']
 
+# Fixed seed bumps for reproducibility
+_iso_seed_bumps = {"server": 101, "media": 202, "error": 303, "external": 404}
+
 iso = []
 for name in ["server", "media", "error", "external"]:
     ctrl_iso = ControlSet(**{k: (k == name) for k in ["server", "media", "error", "external"]})
     ce_iso = effects_from_shares_improved(ctrl_iso, action_shares, pattern_shares)
     
-    # Use incremented seed for each isolation test
-    cfg_iso = ModelConfig(trials=cfg.trials, net_worth=cfg.net_worth, 
-                         seed=cfg.seed + hash(name) % 1000)
+    # Use fixed seed bump for reproducibility
+    cfg_iso = ModelConfig(
+        trials=cfg.trials, 
+        net_worth=cfg.net_worth, 
+        seed=cfg.seed + _iso_seed_bumps[name]
+    )
     losses_iso = cached_simulate(asdict(cfg_iso), asdict(fp), asdict(sp), asdict(ce_iso))
     met_iso = compute_metrics(losses_iso, cfg.net_worth)
     
@@ -565,19 +607,19 @@ for name in ["server", "media", "error", "external"]:
     
     iso.append({
         "Control": name.title(),
-        "ΔEAL": dEAL,
-        "Cost": cost,
-        "ΔEAL per $": (dEAL / cost) if cost > 0 else np.nan,
+        "ΔEAL ($/yr)": dEAL,
+        "Cost ($/yr)": cost,
+        "Benefit per $": (dEAL / cost) if cost > 0 else np.nan,
         "ROSI %": ((dEAL - cost) / cost * 100) if cost > 0 else np.nan
     })
 
-iso_df = pd.DataFrame(iso).sort_values("ΔEAL per $", ascending=False)
+iso_df = pd.DataFrame(iso).sort_values("Benefit per $", ascending=False)
 
 st.dataframe(
     iso_df.style.format({
-        "ΔEAL": "${:,.0f}",
-        "Cost": "${:,.0f}",
-        "ΔEAL per $": "{:,.2f}",
+        "ΔEAL ($/yr)": "${:,.0f}",
+        "Cost ($/yr)": "${:,.0f}",
+        "Benefit per $": "{:,.2f}",
         "ROSI %": "{:.1f}%"
     }),
     use_container_width=True
@@ -587,6 +629,54 @@ st.dataframe(
 best_idx = iso_df['ROSI %'].idxmax()
 best = iso_df.loc[best_idx]
 st.success(f"🏆 Best ROSI: {best['Control']} ({best['ROSI %']:.1f}%)")
+
+# ============================================================================
+# MARGINAL ROI ANALYSIS
+# ============================================================================
+
+st.header("🧩 Marginal ROI (from current bundle)")
+st.caption("Cost-effectiveness of adding one more control to your selected bundle")
+
+current_losses = ctrl_losses
+current_eal = ctrl_metrics['EAL']
+
+marg = []
+for name in ["server", "media", "error", "external"]:
+    if getattr(ctrl, name):  # already in bundle
+        continue
+    
+    # bundle + this control
+    ctrl_plus = ControlSet(**{
+        k: (getattr(ctrl, k) or (k == name)) 
+        for k in ["server", "media", "error", "external"]
+    })
+    ce_plus = effects_from_shares_improved(ctrl_plus, action_shares, pattern_shares)
+    cfg_plus = ModelConfig(trials=cfg.trials, net_worth=cfg.net_worth, seed=cfg.seed + 777)
+    losses_plus = cached_simulate(asdict(cfg_plus), asdict(fp), asdict(sp), asdict(ce_plus))
+    eal_plus = float(np.mean(losses_plus))
+    
+    dEAL = current_eal - eal_plus
+    cost = getattr(costs, name)
+    
+    marg.append({
+        "Add": name.title(),
+        "ΔEAL from bundle ($/yr)": dEAL,
+        "Incremental Cost ($/yr)": cost,
+        "Marginal ROSI %": ((dEAL - cost) / cost * 100) if cost > 0 else np.nan
+    })
+
+if marg:
+    marg_df = pd.DataFrame(marg).sort_values("Marginal ROSI %", ascending=False)
+    st.dataframe(
+        marg_df.style.format({
+            "ΔEAL from bundle ($/yr)": "${:,.0f}",
+            "Incremental Cost ($/yr)": "${:,.0f}",
+            "Marginal ROSI %": "{:.1f}%"
+        }),
+        use_container_width=True
+    )
+else:
+    st.info("All controls are already selected; no marginal adds to evaluate.")
 
 # ============================================================================
 # VISUALIZATIONS
