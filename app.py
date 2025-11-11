@@ -458,51 +458,6 @@ def cis_for_control(control_name, cis_map, limit=8):
             out.update(cis_map["pattern"][k])
     return ", ".join(sorted(list(out))[:limit])
 
-# >>> BEGIN: CIS mapping loader & recommender
-DEFAULT_MAP_PATH = os.path.join("data", "veris_to_cis_lookup.csv")
-
-@st.cache_data(show_spinner=False)
-def load_veris_to_cis(path: str = DEFAULT_MAP_PATH):
-    """
-    Load VERIS→CIS mapping CSV.
-    Expected columns (flexible):
-      - 'action' and/or 'pattern'
-      - 'cis_control' (or 'cis control')
-      - optional: 'ig' (IG1/IG2/IG3), 'notes', etc.
-    Returns a DataFrame or None on failure.
-    """
-    try:
-        df = pd.read_csv(path)
-        df.columns = [c.strip().lower() for c in df.columns]
-        if "cis control" in df.columns and "cis_control" not in df.columns:
-            df = df.rename(columns={"cis control": "cis_control"})
-        # Require at least cis_control + (action or pattern)
-        if "cis_control" not in df.columns or (("action" not in df.columns) and ("pattern" not in df.columns)):
-            return None
-        # Normalize missing columns
-        if "action" not in df.columns:  df["action"] = ""
-        if "pattern" not in df.columns: df["pattern"] = ""
-        return df
-    except Exception:
-        return None
-
-def rank_cis_controls(cis_map: pd.DataFrame, action_shares: dict, pattern_shares: dict, top_n: int = 10) -> pd.DataFrame:
-    """
-    Score CIS controls by overlap with current action/pattern mix.
-    Simple, transparent weight = action_share + pattern_share.
-    """
-    # BAD
-if cis_map is None or cis_map_empty:
-    ...
-
-# GOOD
-if not cis_map or not cis_map.get("loaded"):
-    # show empty state
-    st.info("Add data/veris_to_cis_lookup.csv to enable CIS recommendations.")
-    cis_rank_df = pd.DataFrame(columns=["CIS Control", "Score", "Why"])
-else:
-    # continue with ranking
-    ...
 
 # >>> END: CIS mapping loader & recommender
 
@@ -819,11 +774,46 @@ with st.expander("📋 Assumption Summary", expanded=False):
             st.markdown(f"- NegBin dispersion (r): `{fp.r:.3f}`")
         
                 # Use a safe alias so formatting never crashes
+        def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_shares: dict) -> ControlEffects:
+    """Compute control effects from action/pattern shares with data-driven heuristics."""
+    a = _normalize_shares(action_shares)
+    p = _normalize_shares(pattern_shares)
+
+    lam_mult  = 1.0
+    p_any_mult= 1.0
+    gpd_mult  = 1.0
+
+    hack_intensity   = a.get("hacking", 0) + p.get("Web Applications", 0) + p.get("Crimeware", 0)
+    misuse_intensity = a.get("misuse", 0)  + p.get("Privilege Misuse", 0)
+    error_intensity  = a.get("error", 0)   + p.get("Miscellaneous Errors", 0)
+    physical_int     = a.get("physical",0) + p.get("Lost and Stolen Assets", 0)
+
+    if ctrl.server:
+        lam_mult  *= (1 - 0.35 * hack_intensity)
+        p_any_mult*= (1 - 0.20 * hack_intensity)
+        gpd_mult  *= (1 - 0.15 * hack_intensity)
+    if ctrl.media:
+        lam_mult  *= (1 - 0.25 * physical_int)
+        p_any_mult*= (1 - 0.25 * physical_int)
+    if ctrl.error:
+        lam_mult  *= (1 - 0.20 * error_intensity)
+        p_any_mult*= (1 - 0.25 * error_intensity)
+    if ctrl.external:
+        lam_mult  *= (1 - 0.30 * (hack_intensity + misuse_intensity))
+        gpd_mult  *= (1 - 0.20 * (hack_intensity + misuse_intensity))
+
+    lam_mult   = float(np.clip(lam_mult,   0.2, 1.0))
+    p_any_mult = float(np.clip(p_any_mult, 0.2, 1.0))
+    gpd_mult   = float(np.clip(gpd_mult,   0.2, 1.0))
+
+    return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_mult)
+        # Use a safe alias so formatting never crashes
         _ce = _ensure_control_effects(ce)
         st.markdown("**Control Effects**")
         st.markdown(f"- λ multiplier: `{_ce.lam_mult:.3f}`")
         st.markdown(f"- P(any) multiplier: `{_ce.p_any_mult:.3f}`")
         st.markdown(f"- GPD scale multiplier: `{_ce.gpd_scale_mult:.3f}`")
+
 
     
     with col2:
@@ -1076,21 +1066,19 @@ for name in ["server", "media", "error", "external"]:
 if marg:
     marg_df = pd.DataFrame(marg).sort_values("Marginal ROSI %", ascending=False)
     st.dataframe(
-    iso_df.style.format({
-        "ΔEAL ($/yr)": "${:,.0f}",
-        "Cost ($/yr)": "${:,.0f}",
-        "Benefit per $": "{:,.2f}",
-        "ROSI %": "{:.1f}%"
-    }),
-    use_container_width=True
-)
+        marg_df.style.format({
+            "ΔEAL from bundle ($/yr)": "${:,.0f}",
+            "Incremental Cost ($/yr)": "${:,.0f}",
+            "Marginal ROSI %": "{:.1f}%"
+        }),
+        use_container_width=True
+    )
 
-    
-    # Download marginal results
     marg_csv = marg_df.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Download Marginal ROI (CSV)", marg_csv, "marginal_roi.csv", "text/csv")
 else:
     st.info("All controls are already selected; no marginal adds to evaluate.")
+
 # >>> BEGIN: CIS recommendation table
 st.subheader("🧭 CIS Control Recommendations (ranked by relevance)")
 cis_rank_df = rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10)
