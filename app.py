@@ -491,29 +491,19 @@ def rank_cis_controls(cis_map: pd.DataFrame, action_shares: dict, pattern_shares
     Score CIS controls by overlap with current action/pattern mix.
     Simple, transparent weight = action_share + pattern_share.
     """
-    if cis_map is None or cis_map.empty:
-        return pd.DataFrame()
+    # BAD
+if cis_map is None or cis_map_empty:
+    ...
 
-    m = cis_map.copy()
-    m["action_w"]  = m["action"].map(action_shares).fillna(0.0)
-    m["pattern_w"] = m["pattern"].map(pattern_shares).fillna(0.0)
-    m["weight"]    = m["action_w"] + m["pattern_w"]
+# GOOD
+if not cis_map or not cis_map.get("loaded"):
+    # show empty state
+    st.info("Add data/veris_to_cis_lookup.csv to enable CIS recommendations.")
+    cis_rank_df = pd.DataFrame(columns=["CIS Control", "Score", "Why"])
+else:
+    # continue with ranking
+    ...
 
-    group_cols = ["cis_control"] + (["ig"] if "ig" in m.columns else [])
-    out = (
-        m.groupby(group_cols, as_index=False)
-         .agg(weight=("weight","sum"),
-              coverage=("action","nunique"))
-         .sort_values(["weight","coverage"], ascending=[False,False])
-    )
-
-    out = out[out["weight"] > 0].head(top_n)
-    return out.rename(columns={
-        "cis_control":"CIS Control",
-        "ig":"IG Tier",
-        "weight":"Relevance Score",
-        "coverage":"Coverage (# facets)"
-    })
 # >>> END: CIS mapping loader & recommender
 
     # Base multipliers
@@ -982,6 +972,44 @@ for name in ["server", "media", "error", "external"]:
         "CIS (suggested)": cis_for_control(name, cis_map)
     })
 
+def rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10):
+    """
+    Rank CIS controls by how strongly they are implied by the current
+    action/pattern mix. Actions get weight 1.0, patterns 0.8 (tweak as you like).
+    Returns a DataFrame with columns: CIS Control | Score | Why.
+    """
+    # Safe empty return if mapping not available
+    if not cis_map or not cis_map.get("loaded"):
+        return pd.DataFrame(columns=["CIS Control", "Score", "Why"])
+
+    # Normalize shares to sum to 1
+    a = _normalize_shares(action_shares)
+    p = _normalize_shares(pattern_shares)
+
+    scores = {}
+    reasons = {}
+
+    # Weight contributions from actions
+    for a_key, w in a.items():
+        for cis in cis_map["action"].get(a_key, []):
+            scores[cis] = scores.get(cis, 0.0) + 1.0 * w
+            reasons.setdefault(cis, []).append(f"action:{a_key} ({w:.0%})")
+
+    # Weight contributions from patterns
+    for p_key, w in p.items():
+        for cis in cis_map["pattern"].get(p_key, []):
+            scores[cis] = scores.get(cis, 0.0) + 0.8 * w   # pattern weight
+            reasons.setdefault(cis, []).append(f"pattern:{p_key} ({w:.0%})")
+
+    if not scores:
+        return pd.DataFrame(columns=["CIS Control", "Score", "Why"])
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    rows = [
+        {"CIS Control": cis, "Score": score, "Why": "; ".join(reasons.get(cis, []))}
+        for cis, score in ranked
+    ]
+    return pd.DataFrame(rows)
 
 iso_df = pd.DataFrame(iso).sort_values("Benefit per $", ascending=False)
 
@@ -1064,17 +1092,17 @@ if marg:
 else:
     st.info("All controls are already selected; no marginal adds to evaluate.")
 # >>> BEGIN: CIS recommendation table
-if 'cis_map' in locals() and cis_map is not None:
-    st.header("🧭 CIS Control Recommendations (ranked by relevance)")
-    cis_recs = rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10)
-    if cis_recs.empty:
-        st.info("No overlapping rows between your VERIS shares and the mapping.")
-    else:
-        st.dataframe(cis_recs, use_container_width=True)
-        _cis_csv = cis_recs.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download CIS Recommendations (CSV)", _cis_csv, "cis_recommendations.csv", "text/csv")
-        st.caption("Use **Relevance Score** alongside **ΔEAL/ROSI** to prioritize controls that both align to CIS and reduce risk most.")
-# >>> END: CIS recommendation table
+st.subheader("🧭 CIS Control Recommendations (ranked by relevance)")
+cis_rank_df = rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10)
+
+if cis_rank_df.empty:
+    st.info("Add data/veris_to_cis_lookup.csv (or root veris_to_cis_lookup.csv) to enable CIS recommendations.")
+else:
+    st.dataframe(
+        cis_rank_df.style.format({"Score": "{:.2f}"}),
+        use_container_width=True
+    )
+
 
 # ============================================================================
 # VISUALIZATIONS
