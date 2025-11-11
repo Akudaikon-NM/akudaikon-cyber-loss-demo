@@ -7,6 +7,17 @@ from typing import Optional
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import lognorm
+from dataclasses import is_dataclass  # add
+
+def _to_dict(x):
+    """Return a plain dict whether x is a dataclass or already a dict."""
+    if is_dataclass(x):
+        return asdict(x)
+    if isinstance(x, dict):
+        return x
+    # last-ditch: fall back to __dict__ if present
+    return dict(x.__dict__) if hasattr(x, "__dict__") else x
+
 # >>> BEGIN: extra imports
 import os
 # >>> END: extra imports
@@ -758,8 +769,9 @@ with st.expander("📋 Assumption Summary", expanded=False):
         st.markdown(f"- Random seed: `{cfg.seed}`")
 
 # Run simulations with caching
-base_losses = cached_simulate(asdict(cfg), asdict(fp), asdict(sp))
-ctrl_losses = cached_simulate(asdict(cfg), asdict(fp), asdict(sp), asdict(_ensure_control_effects(ce)))
+base_losses = cached_simulate(_to_dict(cfg), _to_dict(fp), _to_dict(sp))
+ctrl_losses = cached_simulate(_to_dict(cfg), _to_dict(fp), _to_dict(sp), _to_dict(ce))
+
 
 
 # Compute metrics
@@ -851,7 +863,9 @@ for name in ["server", "media", "error", "external"]:
         net_worth=cfg.net_worth, 
         seed=cfg.seed + _iso_seed_bumps[name]
     )
-    losses_iso = cached_simulate(asdict(cfg_iso), asdict(fp), asdict(sp), asdict(ce_iso))
+   losses_iso  = cached_simulate(_to_dict(cfg_iso), _to_dict(fp), _to_dict(sp), _to_dict(ce_iso))
+
+
     met_iso = compute_metrics(losses_iso, cfg.net_worth)
     
     dEAL = baseline_eal - met_iso["EAL"]
@@ -911,7 +925,8 @@ for name in ["server", "media", "error", "external"]:
     })
     ce_plus = effects_from_shares_improved(ctrl_plus, action_shares, pattern_shares)
     cfg_plus = ModelConfig(trials=cfg.trials, net_worth=cfg.net_worth, seed=cfg.seed + 777)
-    losses_plus = cached_simulate(asdict(cfg_plus), asdict(fp), asdict(sp), asdict(ce_plus))
+    losses_plus = cached_simulate(_to_dict(cfg_plus), _to_dict(fp), _to_dict(sp), _to_dict(ce_plus))
+
     eal_plus = float(np.mean(losses_plus))
     
     dEAL = current_eal - eal_plus
@@ -1035,7 +1050,8 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
                 )
                 
                 # Use the same severity params 'sp' selected in the sidebar
-                losses_account  = cached_simulate(asdict(cfg_account), asdict(fp_account), asdict(sp))
+                losses_account  = cached_simulate(_to_dict(cfg_account), _to_dict(fp_account), _to_dict(sp))
+
                 metrics_account = compute_metrics(losses_account, account_net_worth)
                 
                 results.append({
