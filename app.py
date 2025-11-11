@@ -399,11 +399,26 @@ with st.sidebar.expander("🎲 Simulation Config", expanded=True):
     net_worth = st.number_input("Net Worth ($M)", 1.0, 10000.0, 100.0, 10.0) * 1e6
     seed = st.number_input("Random Seed", 0, 9999, 42)
     
-    # Record cap (only relevant if using records mode)
-    record_cap = st.number_input("Record cap (0 = unlimited)", 0, 1000000000, 0, 1000000, 
-                                  help="Maximum records per incident (0 for no cap)")
+    # Record-related parameters
+    st.markdown("**Records Parameters**")
+    cost_per_record_input = st.number_input(
+        "Cost per record ($)", 
+        1.0, 10000.0, 150.0, 10.0,
+        help="Cost per exposed/lost record (used in records-based mode)"
+    )
+    record_cap = st.number_input(
+        "Record cap (0 = unlimited)", 
+        0, 1000000000, 0, 1000000, 
+        help="Maximum records per incident (0 for no cap)"
+    )
 
-cfg = ModelConfig(trials=trials, net_worth=net_worth, seed=seed, record_cap=record_cap)
+cfg = ModelConfig(
+    trials=trials, 
+    net_worth=net_worth, 
+    seed=seed, 
+    record_cap=record_cap,
+    cost_per_record=cost_per_record_input
+)
 
 # Frequency parameters
 with st.sidebar.expander("📊 Frequency Parameters", expanded=True):
@@ -460,14 +475,13 @@ with st.sidebar.expander("💰 Severity Parameters", expanded=True):
                                      help="Mean log(records) — e.g., μ=10 → median ~22k records")
         records_sigma = st.number_input("Records lognormal σ", 0.5, 4.0, 2.0, 0.1,
                                         help="Std dev of log(records)")
-        cost_per_record = st.number_input("Cost per record ($)", 1.0, 10000.0, 150.0, 10.0,
-                                          help="Average cost per exposed/lost record")
         
+        # Use cost_per_record from cfg (set in Simulation Config)
         sp = SevParams(
             use_records=True,
             records_mu=records_mu,
             records_sigma=records_sigma,
-            cost_per_record=cost_per_record,
+            cost_per_record=cfg.cost_per_record,  # Pull from config
             # Dummy values for monetary params (not used)
             mu=12.0, sigma=2.0, gpd_thresh_q=0.95, gpd_scale=1e6, gpd_shape=0.3
         )
@@ -476,7 +490,8 @@ with st.sidebar.expander("💰 Severity Parameters", expanded=True):
         median_records = int(np.exp(records_mu))
         mean_records = int(np.exp(records_mu + records_sigma**2 / 2))
         st.caption(f"📊 Expected records: median={median_records:,}, mean={mean_records:,}")
-        st.caption(f"💵 Implied median loss: ${median_records * cost_per_record:,.0f}")
+        st.caption(f"💵 Implied median loss: ${median_records * cfg.cost_per_record:,.0f}")
+        st.caption(f"💵 Implied mean loss: ${mean_records * cfg.cost_per_record:,.0f}")
         
     else:
         st.markdown("**Monetary Model (GPD/Lognormal)**")
@@ -492,8 +507,8 @@ with st.sidebar.expander("💰 Severity Parameters", expanded=True):
             gpd_thresh_q=gpd_thresh_q, 
             gpd_scale=gpd_scale, 
             gpd_shape=gpd_shape,
-            # Dummy values for records params (not used)
-            records_mu=10.0, records_sigma=2.0, cost_per_record=150.0
+            # Dummy values for records params (not used in monetary mode)
+            records_mu=10.0, records_sigma=2.0, cost_per_record=cfg.cost_per_record
         )
         
         # Clamp severity params
@@ -570,6 +585,10 @@ with st.expander("📋 Assumption Summary", expanded=False):
             st.markdown(f"- Cost per record: `${sp.cost_per_record:.2f}`")
             if cfg.record_cap > 0:
                 st.markdown(f"- Record cap: `{cfg.record_cap:,}`")
+            
+            # Show expected losses
+            median_records = int(np.exp(sp.records_mu))
+            st.markdown(f"- Implied median loss: `${median_records * sp.cost_per_record:,.0f}`")
         else:
             st.markdown("**Mode:** Monetary (GPD/Lognormal)")
             st.markdown(f"- Lognormal μ: `{sp.mu:.3f}`")
@@ -838,38 +857,6 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
                     net_worth=account_net_worth, 
                     seed=_stable_seed_from(account_id, base=cfg.seed)
                 )
-                fp_account = FreqParams(
-                    lam=account_lam,
-                    p_any=account_p_any,
-                    negbin=fp.negbin,
-                    r=fp.r
-                )
-                
-                losses_account  = cached_simulate(asdict(cfg_account), asdict(fp_account), asdict(sp))
-                metrics_account = compute_metrics(losses_account, account_net_worth)
-                
-                results.append({
-                    'account_id': account_id,
-                    'EAL': metrics_account['EAL'],
-                    'VaR95': metrics_account['VaR95'],
-                    'VaR99': metrics_account['VaR99'],
-                    'P(Ruin)': metrics_account['P(Ruin)']
-                })
-                
-                progress_bar.progress((idx + 1) / len(df))
-            
-            results_df = pd.DataFrame(results)
-            st.success("✓ Portfolio analysis complete!")
-            st.dataframe(results_df, use_container_width=True)
-            
-            # Download results
-            csv = results_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📥 Download Results CSV",
-                data=csv,
-                file_name="portfolio_results.csv",
-                mime="text/csv"
-            )
 
 # ============================================================================
 # SANITY CHECK GUIDE
@@ -890,9 +877,38 @@ with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
 **Records-based model:**
 - Higher **records μ** shifts the entire distribution right (more records per incident).
 - Higher **records σ** increases variability — occasional mega-breaches become more likely.
-- **Cost per record** scales linearly with total loss. Typical range: $100–$300 for PII/PHI.
+- **Cost per record** scales linearly with total loss. Typical range: $100-$300 for PII/PHI.
 - **Record cap** truncates tail; useful for modeling contractual limits or technical constraints.
 """)
+                fp_account = FreqParams(lam=account_lam, p_any=account_p_any, 
+                                       negbin=fp.negbin, r=fp.r)
+                
+                losses_account = cached_simulate(asdict(cfg_account), asdict(fp_account), 
+                                                asdict(sp))
+                metrics_account = compute_metrics(losses_account, account_net_worth)
+                
+                results.append({
+                    'account_id': account_id,
+                    'EAL': metrics_account['EAL'],
+                    'VaR95': metrics_account['VaR95'],
+                    'VaR99': metrics_account['VaR99'],
+                    'P(Ruin)': metrics_account['P(Ruin)']
+                })
+                
+                progress_bar.progress((idx + 1) / len(df))
+            
+            results_df = pd.DataFrame(results)
+            st.success("✓ Portfolio analysis complete!")
+            st.dataframe(results_df, use_container_width=True)
+            
+            # Download results
+            csv = results_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Results CSV",
+                data=csv,
+                file_name="portfolio_results.csv",
+                mime="text/csv"
+            )
 
 # ============================================================================
 # EXPORT CONFIGURATION
