@@ -1036,7 +1036,7 @@ for name in ["server", "media", "error", "external"]:
     dEAL = current_eal - eal_plus
     cost = getattr(costs, name)
     
-        marg.append({
+    marg.append({
         "Add": name.title(),
         "ΔEAL from bundle ($/yr)": dEAL,
         "Incremental Cost ($/yr)": cost,
