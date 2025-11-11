@@ -352,14 +352,7 @@ def cached_lec(losses, n):
     """Cached LEC calculation."""
     return lec(losses, n=n)
 
-def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_shares: dict) -> ControlEffects:
-    """Compute control effects from action/pattern shares with data-driven heuristics."""
-    # Normalize inputs
-    a = _normalize_shares(action_shares)
-    p = _normalize_shares(pattern_shares)
-    # --- SAFE WRAPPER FOR CONTROL EFFECTS ---
-def _ensure_control_effects(x: Optional[ControlEffects]) -> ControlEffects:
-    return x if isinstance(x, ControlEffects) else ControlEffects()
+
 # ============================================================================
 # CIS MAPPING (VERIS -> CIS)
 # ============================================================================
@@ -436,62 +429,41 @@ def cis_for_profile(action_shares, pattern_shares, cis_map, action_thresh=0.10, 
             out.update(cis_map["pattern"][p])
     return sorted(list(out))[:top_n]
 
+def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_shares: dict) -> ControlEffects:
+    """Compute control effects from action/pattern shares with data-driven heuristics."""
+    a = _normalize_shares(action_shares)
+    p = _normalize_shares(pattern_shares)
 
-# which VERIS channels each demo control mitigates (used to suggest CIS)
-CONTROL_TO_VERIS_KEYS = {
-    "server":   ["hacking", "Web Applications", "Crimeware"],
-    "media":    ["physical", "Lost and Stolen Assets"],
-    "error":    ["error", "Miscellaneous Errors"],
-    "external": ["hacking", "Web Applications", "Crimeware", "Privilege Misuse"],
-}
-
-def cis_for_control(control_name, cis_map, limit=8):
-    """Return CIS list for a given demo control based on VERIS channels it mitigates."""
-    if not cis_map.get("loaded"):
-        return ""
-    keys = CONTROL_TO_VERIS_KEYS.get(control_name, [])
-    out = set()
-    for k in keys:
-        if k in cis_map["action"]:
-            out.update(cis_map["action"][k])
-        if k in cis_map["pattern"]:
-            out.update(cis_map["pattern"][k])
-    return ", ".join(sorted(list(out))[:limit])
-
-
-# >>> END: CIS mapping loader & recommender
-
-    # Base multipliers
-    lam_mult = 1.0
+    lam_mult   = 1.0
     p_any_mult = 1.0
-    gpd_mult = 1.0
-    
-    # Heuristic weights by channel
-    hack_intensity = a.get("hacking", 0) + p.get("Web Applications", 0) + p.get("Crimeware", 0)
-    misuse_intensity = a.get("misuse", 0) + p.get("Privilege Misuse", 0)
-    error_intensity = a.get("error", 0) + p.get("Miscellaneous Errors", 0)
-    physical_int = a.get("physical", 0) + p.get("Lost and Stolen Assets", 0)
-    
+    gpd_mult   = 1.0
+
+    hack_intensity   = a.get("hacking", 0) + p.get("Web Applications", 0) + p.get("Crimeware", 0)
+    misuse_intensity = a.get("misuse", 0)  + p.get("Privilege Misuse", 0)
+    error_intensity  = a.get("error", 0)   + p.get("Miscellaneous Errors", 0)
+    physical_int     = a.get("physical", 0)+ p.get("Lost and Stolen Assets", 0)
+
     if ctrl.server:
-        lam_mult *= (1 - 0.35 * hack_intensity)      # frequency reduction on hack/web
+        lam_mult   *= (1 - 0.35 * hack_intensity)
         p_any_mult *= (1 - 0.20 * hack_intensity)
-        gpd_mult *= (1 - 0.15 * hack_intensity)
+        gpd_mult   *= (1 - 0.15 * hack_intensity)
     if ctrl.media:
-        lam_mult *= (1 - 0.25 * physical_int)        # fewer "loss with data" events
+        lam_mult   *= (1 - 0.25 * physical_int)
         p_any_mult *= (1 - 0.25 * physical_int)
     if ctrl.error:
-        lam_mult *= (1 - 0.20 * error_intensity)
+        lam_mult   *= (1 - 0.20 * error_intensity)
         p_any_mult *= (1 - 0.25 * error_intensity)
     if ctrl.external:
-        lam_mult *= (1 - 0.30 * (hack_intensity + misuse_intensity))  # detect/contain earlier
-        gpd_mult *= (1 - 0.20 * (hack_intensity + misuse_intensity))  # shorter tails
-    
-    # Keep within [0.2, 1.0] to avoid pathological extremes in demos
-    lam_mult = float(np.clip(lam_mult, 0.2, 1.0))
+        lam_mult   *= (1 - 0.30 * (hack_intensity + misuse_intensity))
+        gpd_mult   *= (1 - 0.20 * (hack_intensity + misuse_intensity))
+
+    lam_mult   = float(np.clip(lam_mult,   0.2, 1.0))
     p_any_mult = float(np.clip(p_any_mult, 0.2, 1.0))
-    gpd_mult = float(np.clip(gpd_mult, 0.2, 1.0))
-    
-return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_mult)
+    gpd_mult   = float(np.clip(gpd_mult,   0.2, 1.0))
+
+    return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_mult)
+
+
 
 def eal_ci(losses: np.ndarray, n_boot: int = 1000, alpha: float = 0.95):
     """Bootstrap confidence interval for EAL."""
@@ -774,8 +746,12 @@ with st.expander("📋 Assumption Summary", expanded=False):
             st.markdown(f"- NegBin dispersion (r): `{fp.r:.3f}`")
         
                 # Use a safe alias so formatting never crashes
-        def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_shares: dict) -> ControlEffects:
-    """Compute control effects from action/pattern shares with data-driven heuristics."""
+        _ce = _ensure_control_effects(ce)
+st.markdown("**Control Effects**")
+st.markdown(f"- λ multiplier: `{_ce.lam_mult:.3f}`")
+st.markdown(f"- P(any) multiplier: `{_ce.p_any_mult:.3f}`")
+st.markdown(f"- GPD scale multiplier: `{_ce.gpd_scale_mult:.3f}`")
+
     a = _normalize_shares(action_shares)
     p = _normalize_shares(pattern_shares)
 
