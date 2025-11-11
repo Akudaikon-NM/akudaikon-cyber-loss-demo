@@ -62,6 +62,10 @@ class SevParams:
     gpd_thresh_q: float = 0.95
     gpd_scale: float = 1e6
     gpd_shape: float = 0.3
+    use_records: bool = False
+    records_mu: float = 10.0
+    records_sigma: float = 2.0
+    cost_per_record: float = 150.0
 
 @dataclass
 class ControlSet:
@@ -142,8 +146,9 @@ def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams,
     gpd_scale_eff = sp.gpd_scale * (ce.gpd_scale_mult if ce else 1.0)
     
     # Precompute dollar threshold once per call (outside the loops)
-    # Better (and simpler) using scipy.stats.lognorm
-    body_thresh_val = float(lognorm(s=sp.sigma, scale=np.exp(sp.mu)).ppf(sp.gpd_thresh_q))
+    if not sp.use_records:
+        # Better (and simpler) using scipy.stats.lognorm
+        body_thresh_val = float(lognorm(s=sp.sigma, scale=np.exp(sp.mu)).ppf(sp.gpd_thresh_q))
     
     annual_losses = np.zeros(cfg.trials)
     
@@ -165,23 +170,30 @@ def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams,
             if np.random.random() > p_any_eff:
                 continue
             
-            # Generate loss amount (lognormal body + GPD tail)
-            u = np.random.random()
-            if u < sp.gpd_thresh_q:
-                # Body (lognormal)
-                loss = np.exp(np.random.normal(sp.mu, sp.sigma))
+            if sp.use_records:
+                # Records-based loss model
+                n_records = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
+                if cfg.record_cap > 0:
+                    n_records = min(n_records, cfg.record_cap)
+                loss = n_records * sp.cost_per_record
             else:
-                # Tail (GPD on excess over threshold)
-                u_tail = np.random.random()  # fresh uniform for the tail
-                xi = sp.gpd_shape
-                beta = gpd_scale_eff
-                if xi == 0.0:
-                    # Exponential tail on excess
-                    excess = np.random.exponential(beta)
+                # Monetary severity model (lognormal body + GPD tail)
+                u = np.random.random()
+                if u < sp.gpd_thresh_q:
+                    # Body (lognormal)
+                    loss = np.exp(np.random.normal(sp.mu, sp.sigma))
                 else:
-                    # Inverse CDF of GPD
-                    excess = beta * (u_tail**(-xi) - 1.0) / xi
-                loss = body_thresh_val + max(0.0, excess)
+                    # Tail (GPD on excess over threshold)
+                    u_tail = np.random.random()  # fresh uniform for the tail
+                    xi = sp.gpd_shape
+                    beta = gpd_scale_eff
+                    if xi == 0.0:
+                        # Exponential tail on excess
+                        excess = np.random.exponential(beta)
+                    else:
+                        # Inverse CDF of GPD
+                        excess = beta * (u_tail**(-xi) - 1.0) / xi
+                    loss = body_thresh_val + max(0.0, excess)
             
             annual_losses[i] += loss
     
@@ -386,8 +398,12 @@ with st.sidebar.expander("🎲 Simulation Config", expanded=True):
     trials = st.number_input("Monte Carlo Trials", 1000, 100000, 10000, 1000)
     net_worth = st.number_input("Net Worth ($M)", 1.0, 10000.0, 100.0, 10.0) * 1e6
     seed = st.number_input("Random Seed", 0, 9999, 42)
+    
+    # Record cap (only relevant if using records mode)
+    record_cap = st.number_input("Record cap (0 = unlimited)", 0, 1000000000, 0, 1000000, 
+                                  help="Maximum records per incident (0 for no cap)")
 
-cfg = ModelConfig(trials=trials, net_worth=net_worth, seed=seed)
+cfg = ModelConfig(trials=trials, net_worth=net_worth, seed=seed, record_cap=record_cap)
 
 # Frequency parameters
 with st.sidebar.expander("📊 Frequency Parameters", expanded=True):
@@ -435,23 +451,59 @@ with st.sidebar.expander("🔬 Bayesian Frequency Update", expanded=False):
 
 # Severity parameters
 with st.sidebar.expander("💰 Severity Parameters", expanded=True):
-    mu = st.number_input("Lognormal μ", 8.0, 16.0, 12.0, 0.5)
-    sigma = st.number_input("Lognormal σ", 0.5, 4.0, 2.0, 0.1)
-    gpd_thresh_q = st.slider("GPD threshold quantile", 0.85, 0.99, 0.95, 0.01)
-    gpd_scale = st.number_input("GPD scale ($K)", 100.0, 10000.0, 1000.0, 100.0) * 1000
-    gpd_shape = st.number_input("GPD shape (ξ)", 0.0, 1.0, 0.3, 0.05)
-
-sp = SevParams(mu=mu, sigma=sigma, gpd_thresh_q=gpd_thresh_q, 
-               gpd_scale=gpd_scale, gpd_shape=gpd_shape)
-
-# Clamp severity params
-sp.gpd_scale = float(max(1.0, sp.gpd_scale))
-
-# Severity parameter warnings
-if sp.gpd_shape >= 1.0:
-    st.sidebar.warning("⚠️ ξ (GPD shape) ≥ 1 yields infinite mean tail. Results may be unstable.")
-if sp.sigma > 2.5:
-    st.sidebar.warning("⚠️ Lognormal σ is quite high; body may dominate and inflate EAL/VaR.")
+    use_records = st.checkbox("Use records-based loss model", value=False,
+                              help="Toggle between monetary severity (GPD/lognormal) and records × $/record")
+    
+    if use_records:
+        st.markdown("**Records Model**")
+        records_mu = st.number_input("Records lognormal μ", 6.0, 20.0, 10.0, 0.5,
+                                     help="Mean log(records) — e.g., μ=10 → median ~22k records")
+        records_sigma = st.number_input("Records lognormal σ", 0.5, 4.0, 2.0, 0.1,
+                                        help="Std dev of log(records)")
+        cost_per_record = st.number_input("Cost per record ($)", 1.0, 10000.0, 150.0, 10.0,
+                                          help="Average cost per exposed/lost record")
+        
+        sp = SevParams(
+            use_records=True,
+            records_mu=records_mu,
+            records_sigma=records_sigma,
+            cost_per_record=cost_per_record,
+            # Dummy values for monetary params (not used)
+            mu=12.0, sigma=2.0, gpd_thresh_q=0.95, gpd_scale=1e6, gpd_shape=0.3
+        )
+        
+        # Show expected records distribution
+        median_records = int(np.exp(records_mu))
+        mean_records = int(np.exp(records_mu + records_sigma**2 / 2))
+        st.caption(f"📊 Expected records: median={median_records:,}, mean={mean_records:,}")
+        st.caption(f"💵 Implied median loss: ${median_records * cost_per_record:,.0f}")
+        
+    else:
+        st.markdown("**Monetary Model (GPD/Lognormal)**")
+        mu = st.number_input("Lognormal μ", 8.0, 16.0, 12.0, 0.5)
+        sigma = st.number_input("Lognormal σ", 0.5, 4.0, 2.0, 0.1)
+        gpd_thresh_q = st.slider("GPD threshold quantile", 0.85, 0.99, 0.95, 0.01)
+        gpd_scale = st.number_input("GPD scale ($K)", 100.0, 10000.0, 1000.0, 100.0) * 1000
+        gpd_shape = st.number_input("GPD shape (ξ)", 0.0, 1.0, 0.3, 0.05)
+        
+        sp = SevParams(
+            use_records=False,
+            mu=mu, sigma=sigma, 
+            gpd_thresh_q=gpd_thresh_q, 
+            gpd_scale=gpd_scale, 
+            gpd_shape=gpd_shape,
+            # Dummy values for records params (not used)
+            records_mu=10.0, records_sigma=2.0, cost_per_record=150.0
+        )
+        
+        # Clamp severity params
+        sp.gpd_scale = float(max(1.0, sp.gpd_scale))
+        
+        # Severity parameter warnings
+        if sp.gpd_shape >= 1.0:
+            st.sidebar.warning("⚠️ ξ (GPD shape) ≥ 1 yields infinite mean tail. Results may be unstable.")
+        if sp.sigma > 2.5:
+            st.sidebar.warning("⚠️ Lognormal σ is quite high; body may dominate and inflate EAL/VaR.")
 
 # Advanced confidence interval settings
 with st.sidebar.expander("📐 Confidence Intervals (advanced)", expanded=False):
@@ -511,11 +563,20 @@ with st.expander("📋 Assumption Summary", expanded=False):
     
     with col2:
         st.markdown("**Severity Parameters**")
-        st.markdown(f"- Lognormal μ: `{sp.mu:.3f}`")
-        st.markdown(f"- Lognormal σ: `{sp.sigma:.3f}`")
-        st.markdown(f"- GPD threshold quantile: `{sp.gpd_thresh_q:.3f}`")
-        st.markdown(f"- GPD scale (β): `${sp.gpd_scale:,.0f}`")
-        st.markdown(f"- GPD shape (ξ): `{sp.gpd_shape:.3f}`")
+        if sp.use_records:
+            st.markdown("**Mode:** Records-based")
+            st.markdown(f"- Records lognormal μ: `{sp.records_mu:.3f}`")
+            st.markdown(f"- Records lognormal σ: `{sp.records_sigma:.3f}`")
+            st.markdown(f"- Cost per record: `${sp.cost_per_record:.2f}`")
+            if cfg.record_cap > 0:
+                st.markdown(f"- Record cap: `{cfg.record_cap:,}`")
+        else:
+            st.markdown("**Mode:** Monetary (GPD/Lognormal)")
+            st.markdown(f"- Lognormal μ: `{sp.mu:.3f}`")
+            st.markdown(f"- Lognormal σ: `{sp.sigma:.3f}`")
+            st.markdown(f"- GPD threshold quantile: `{sp.gpd_thresh_q:.3f}`")
+            st.markdown(f"- GPD scale (β): `${sp.gpd_scale:,.0f}`")
+            st.markdown(f"- GPD shape (ξ): `{sp.gpd_shape:.3f}`")
         
         st.markdown("**Simulation Config**")
         st.markdown(f"- Monte Carlo trials: `{cfg.trials:,}`")
@@ -749,67 +810,34 @@ with col2:
 with st.expander("📁 Portfolio batch (CSV)", expanded=False):
     st.markdown("Upload a CSV with columns: `account_id`, `net_worth`, `lam`, `p_any`, etc.")
     up = st.file_uploader("Accounts CSV", type=["csv"])
-
+    
     if up:
         df = pd.read_csv(up)
         st.write(f"Loaded {len(df)} accounts")
-
+        
         if st.button("Run Portfolio Analysis"):
             results = []
             progress_bar = st.progress(0)
-
+            
             for idx, row in df.iterrows():
                 # Extract parameters from CSV with robust type conversion
                 account_id = row.get('account_id', f'Account_{idx}')
-
+                
                 account_net_worth = pd.to_numeric(row.get('net_worth', 100e6), errors='coerce')
-                account_lam       = pd.to_numeric(row.get('lam', 2.0), errors='coerce')
-                account_p_any     = pd.to_numeric(row.get('p_any', 0.7), errors='coerce')
-
+                account_lam = pd.to_numeric(row.get('lam', 2.0), errors='coerce')
+                account_p_any = pd.to_numeric(row.get('p_any', 0.7), errors='coerce')
+                
                 # Validate and clamp to sensible ranges
                 account_net_worth = float(account_net_worth if np.isfinite(account_net_worth) else 100e6)
-                account_lam       = float(account_lam if np.isfinite(account_lam) else 2.0)
-                account_p_any     = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
-
-                # Run simulation for this account (stable seed by ID)
+                account_lam = float(account_lam if np.isfinite(account_lam) else 2.0)
+                account_p_any = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
+                
+                # Run simulation for this account
                 cfg_account = ModelConfig(
-                    trials=cfg.trials,
-                    net_worth=account_net_worth,
+                    trials=cfg.trials, 
+                    net_worth=account_net_worth, 
                     seed=_stable_seed_from(account_id, base=cfg.seed)
                 )
-                fp_account = FreqParams(
-                    lam=account_lam,
-                    p_any=account_p_any,
-                    negbin=fp.negbin,
-                    r=fp.r
-                )
-
-                losses_account  = cached_simulate(asdict(cfg_account), asdict(fp_account), asdict(sp))
-                metrics_account = compute_metrics(losses_account, account_net_worth)
-
-                results.append({
-                    'account_id': account_id,
-                    'EAL': metrics_account['EAL'],
-                    'VaR95': metrics_account['VaR95'],
-                    'VaR99': metrics_account['VaR99'],
-                    'P(Ruin)': metrics_account['P(Ruin)']
-                })
-
-                progress_bar.progress((idx + 1) / len(df))
-
-            results_df = pd.DataFrame(results)
-            st.success("✓ Portfolio analysis complete!")
-            st.dataframe(results_df, use_container_width=True)
-
-            # Download results
-            csv = results_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📥 Download Results CSV",
-                data=csv,
-                file_name="portfolio_results.csv",
-                mime="text/csv"
-            )
-
 
 # ============================================================================
 # SANITY CHECK GUIDE
@@ -826,7 +854,42 @@ with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
 - **Server hardening** should have strongest effect when hacking/web app patterns dominate.
 - **Media encryption** primarily helps with physical asset loss patterns.
 - **Control isolation** shows standalone value; **marginal ROI** shows incremental value from current bundle.
+
+**Records-based model:**
+- Higher **records μ** shifts the entire distribution right (more records per incident).
+- Higher **records σ** increases variability — occasional mega-breaches become more likely.
+- **Cost per record** scales linearly with total loss. Typical range: $100-$300 for PII/PHI.
+- **Record cap** truncates tail; useful for modeling contractual limits or technical constraints.
 """)
+                fp_account = FreqParams(lam=account_lam, p_any=account_p_any, 
+                                       negbin=fp.negbin, r=fp.r)
+                
+                losses_account = cached_simulate(asdict(cfg_account), asdict(fp_account), 
+                                                asdict(sp))
+                metrics_account = compute_metrics(losses_account, account_net_worth)
+                
+                results.append({
+                    'account_id': account_id,
+                    'EAL': metrics_account['EAL'],
+                    'VaR95': metrics_account['VaR95'],
+                    'VaR99': metrics_account['VaR99'],
+                    'P(Ruin)': metrics_account['P(Ruin)']
+                })
+                
+                progress_bar.progress((idx + 1) / len(df))
+            
+            results_df = pd.DataFrame(results)
+            st.success("✓ Portfolio analysis complete!")
+            st.dataframe(results_df, use_container_width=True)
+            
+            # Download results
+            csv = results_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Results CSV",
+                data=csv,
+                file_name="portfolio_results.csv",
+                mime="text/csv"
+            )
 
 # ============================================================================
 # EXPORT CONFIGURATION
