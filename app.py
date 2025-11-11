@@ -7,6 +7,9 @@ from typing import Optional
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import lognorm
+# >>> BEGIN: extra imports
+import os
+# >>> END: extra imports
 
 # KEEP this one at the very top (already there)
 st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
@@ -14,6 +17,81 @@ st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 # Title and caption (removed duplicate set_page_config)
 st.title("Akudaikon | Cyber-Loss Demo")
 st.caption("Monte Carlo loss model with control ROI, diagnostics, and optional Bayesian frequency.")
+# >>> BEGIN: Help & How-To
+with st.expander("❓ Help & How to Use This App", expanded=False):
+    st.markdown("""
+### What this app does
+This is a **Monte Carlo cyber-loss model** that estimates **Expected Annual Loss (EAL)**, **VaR95/99**, **CVaR95**, **P(Ruin)**, and an **LEC**.  
+It also quantifies **control ROI** by comparing **ΔEAL** to your **annual control cost** (ROSI).
+
+---
+
+### Inputs (left sidebar)
+
+**🎲 Simulation Config**
+- **Monte Carlo Trials**: number of simulated years. More ⇒ smoother estimates.
+- **Net Worth**: used to compute **P(Ruin)** (loss ≥ net worth).
+- **Random Seed**: reproducibility.
+- **Cost per record / Record cap**: used when you switch to the **Records-based** model.
+
+**📊 Frequency Parameters**
+- **λ**: average number of incidents per year.
+- **P(any loss | incident)**: chance an incident creates a dollar loss.
+- **Use Negative Binomial + r**: over-dispersion of incident counts (lower **r** ⇒ fatter frequency tails).
+
+**🔬 Bayesian Frequency Update (optional)**
+- Enter **Observed incidents (k)** over **Observation period (T)** to compute an updated **λ** via a Gamma-Poisson posterior.
+
+**💰 Severity Parameters**
+- **Monetary model (GPD/Lognormal)**: body (**μ, σ**), tail threshold (quantile), tail **scale β** and **shape ξ**.  
+  _Keep **ξ < 0.5** for realistic tails; **ξ ≥ 1** ⇒ infinite mean tail._
+- **Records-based**: records ~ lognormal(**μ, σ**), multiplied by **$ / record** (typical 100–300), optional **record cap**.
+
+**🛡️ Controls & 💵 Costs**
+- Toggle **Server hardening**, **Media encryption**, **Error reduction**, **External monitoring**.  
+- Enter annual costs to compute **ROSI**.
+
+**📁 Load parameter JSON**
+- Load action/pattern shares and other defaults from a JSON file.
+
+---
+
+### Reading the results
+
+**🎯 Metrics**
+- **EAL**: expected annual loss (mean).
+- **VaR95/99**: thresholds not exceeded 95%/99% of the time.
+- **CVaR95**: mean loss **above** VaR95.
+- **Max**: worst simulated year.
+- **P(Ruin)**: probability annual loss ≥ net worth.
+
+**📈 Confidence Intervals**
+- Bootstrap CIs for **VaR95** and **EAL** show sampling uncertainty.
+
+**🔬 Control Isolation**
+- Each control **by itself** (others off): ΔEAL, Benefit per $, and ROSI%.
+
+**🧩 Marginal ROI**
+- From your **current** bundle, shows the next control’s **incremental** ΔEAL and marginal ROSI%.
+
+**📊 Distributions**
+- **LEC** (log–log) for Baseline vs Controlled.  
+- Log-scaled histograms of annual loss.
+
+**📁 Portfolio batch**
+- Upload accounts (`account_id, net_worth, lam, p_any, ...`) to batch EAL/VaR/P(Ruin).
+
+---
+
+### Quick sanity checks
+- Turning **External monitoring** on lowers **λ** and slightly shrinks tails.
+- Higher **σ** pushes **VaR95/99** up more than EAL.
+- With **NegBin**, lower **r** ⇒ more tail risk than mean shift.
+- **Server hardening** is strongest when hacking/web patterns dominate.
+- **Media encryption** helps when physical loss of assets matters.
+- Avoid **ξ ≥ 1** (infinite mean tail).
+    """)
+# >>> END: Help & How-To
 
 # ============================================================================
 # SANITY CHECKS / EXPECTED BEHAVIORS
@@ -271,7 +349,64 @@ def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_
     # Normalize inputs
     a = _normalize_shares(action_shares)
     p = _normalize_shares(pattern_shares)
-    
+    # >>> BEGIN: CIS mapping loader & recommender
+DEFAULT_MAP_PATH = os.path.join("data", "veris_to_cis_lookup.csv")
+
+@st.cache_data(show_spinner=False)
+def load_veris_to_cis(path: str = DEFAULT_MAP_PATH):
+    """
+    Load VERIS→CIS mapping CSV.
+    Expected columns (flexible):
+      - 'action' and/or 'pattern'
+      - 'cis_control' (or 'cis control')
+      - optional: 'ig' (IG1/IG2/IG3), 'notes', etc.
+    Returns a DataFrame or None on failure.
+    """
+    try:
+        df = pd.read_csv(path)
+        df.columns = [c.strip().lower() for c in df.columns]
+        if "cis control" in df.columns and "cis_control" not in df.columns:
+            df = df.rename(columns={"cis control": "cis_control"})
+        # Require at least cis_control + (action or pattern)
+        if "cis_control" not in df.columns or (("action" not in df.columns) and ("pattern" not in df.columns)):
+            return None
+        # Normalize missing columns
+        if "action" not in df.columns:  df["action"] = ""
+        if "pattern" not in df.columns: df["pattern"] = ""
+        return df
+    except Exception:
+        return None
+
+def rank_cis_controls(cis_map: pd.DataFrame, action_shares: dict, pattern_shares: dict, top_n: int = 10) -> pd.DataFrame:
+    """
+    Score CIS controls by overlap with current action/pattern mix.
+    Simple, transparent weight = action_share + pattern_share.
+    """
+    if cis_map is None or cis_map.empty:
+        return pd.DataFrame()
+
+    m = cis_map.copy()
+    m["action_w"]  = m["action"].map(action_shares).fillna(0.0)
+    m["pattern_w"] = m["pattern"].map(pattern_shares).fillna(0.0)
+    m["weight"]    = m["action_w"] + m["pattern_w"]
+
+    group_cols = ["cis_control"] + (["ig"] if "ig" in m.columns else [])
+    out = (
+        m.groupby(group_cols, as_index=False)
+         .agg(weight=("weight","sum"),
+              coverage=("action","nunique"))
+         .sort_values(["weight","coverage"], ascending=[False,False])
+    )
+
+    out = out[out["weight"] > 0].head(top_n)
+    return out.rename(columns={
+        "cis_control":"CIS Control",
+        "ig":"IG Tier",
+        "weight":"Relevance Score",
+        "coverage":"Coverage (# facets)"
+    })
+# >>> END: CIS mapping loader & recommender
+
     # Base multipliers
     lam_mult = 1.0
     p_any_mult = 1.0
@@ -363,6 +498,15 @@ with st.sidebar.expander("📁 Load parameter JSON", expanded=False):
             pattern_shares = _normalize_shares(_p)
             st.session_state["_pattern_shares"] = pattern_shares
             st.success("✓ Pattern shares loaded")
+# >>> BEGIN: Sidebar CIS mapping viewer
+with st.sidebar.expander("📚 CIS Mapping (VERIS → CIS)", expanded=False):
+    cis_map = load_veris_to_cis()
+    if cis_map is None:
+        st.info("Add **data/veris_to_cis_lookup.csv** to enable CIS recommendations.")
+    else:
+        st.caption(f"Loaded CIS mapping: {len(cis_map):,} rows")
+        st.dataframe(cis_map.head(10), use_container_width=True)
+# >>> END: Sidebar CIS mapping viewer
 
 # Use loaded shares or defaults
 action_shares = st.session_state.get("_action_shares", DEFAULT_ACTION_SHARES)
@@ -784,6 +928,18 @@ if marg:
     st.download_button("📥 Download Marginal ROI (CSV)", marg_csv, "marginal_roi.csv", "text/csv")
 else:
     st.info("All controls are already selected; no marginal adds to evaluate.")
+# >>> BEGIN: CIS recommendation table
+if 'cis_map' in locals() and cis_map is not None:
+    st.header("🧭 CIS Control Recommendations (ranked by relevance)")
+    cis_recs = rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10)
+    if cis_recs.empty:
+        st.info("No overlapping rows between your VERIS shares and the mapping.")
+    else:
+        st.dataframe(cis_recs, use_container_width=True)
+        _cis_csv = cis_recs.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download CIS Recommendations (CSV)", _cis_csv, "cis_recommendations.csv", "text/csv")
+        st.caption("Use **Relevance Score** alongside **ΔEAL/ROSI** to prioritize controls that both align to CIS and reduce risk most.")
+# >>> END: CIS recommendation table
 
 # ============================================================================
 # VISUALIZATIONS
