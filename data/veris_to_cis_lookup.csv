@@ -1,0 +1,70 @@
+veris_field,cis_control
+action.hacking.result.Exfiltrate,13.0
+action.hacking.variety.Abuse of functionality,10.0
+action.hacking.variety.Abuse of functionality,12.0
+action.hacking.variety.Abuse of functionality,13.0
+action.hacking.variety.Abuse of functionality,16.0
+action.hacking.variety.Abuse of functionality,18.0
+action.hacking.variety.Abuse of functionality,2.0
+action.hacking.variety.Abuse of functionality,4.0
+action.hacking.variety.Abuse of functionality,5.0
+action.hacking.variety.Abuse of functionality,6.0
+action.hacking.variety.Abuse of functionality,9.0
+action.hacking.variety.Brute force,4.0
+action.hacking.variety.Brute force,5.0
+action.hacking.variety.Brute force,6.0
+action.hacking.variety.DoS,4.0
+action.hacking.variety.DoS,7.0
+action.hacking.variety.Exploit vuln,10.0
+action.hacking.variety.Exploit vuln,12.0
+action.hacking.variety.Exploit vuln,13.0
+action.hacking.variety.Exploit vuln,16.0
+action.hacking.variety.Exploit vuln,18.0
+action.hacking.variety.Exploit vuln,3.0
+action.hacking.variety.Exploit vuln,4.0
+action.hacking.variety.Exploit vuln,5.0
+action.hacking.variety.Exploit vuln,6.0
+action.hacking.variety.Exploit vuln,7.0
+action.hacking.variety.Use of stolen creds,16.0
+action.hacking.variety.Use of stolen creds,4.0
+action.hacking.variety.Use of stolen creds,5.0
+action.hacking.variety.Use of stolen creds,6.0
+action.hacking.vector.Web application,10.0
+action.hacking.vector.Web application,12.0
+action.hacking.vector.Web application,13.0
+action.hacking.vector.Web application,16.0
+action.hacking.vector.Web application,18.0
+action.hacking.vector.Web application,3.0
+action.hacking.vector.Web application,4.0
+action.hacking.vector.Web application,5.0
+action.hacking.vector.Web application,6.0
+action.hacking.vector.Web application,7.0
+action.malware.variety.Downloader,13.0
+action.malware.variety.Password dumper,11.0
+action.malware.variety.Password dumper,14.0
+action.malware.variety.Password dumper,16.0
+action.malware.variety.Password dumper,18.0
+action.malware.variety.Password dumper,2.0
+action.malware.variety.Password dumper,3.0
+action.malware.variety.Password dumper,4.0
+action.malware.variety.Password dumper,5.0
+action.malware.variety.Password dumper,6.0
+action.malware.variety.Ransomware,11.0
+action.malware.vector.Download by malware,13.0
+action.malware.vector.Removable media,10.0
+action.malware.vector.Removable media,18.0
+action.malware.vector.Removable media,2.0
+action.malware.vector.Removable media,4.0
+action.malware.vector.Removable media,7.0
+action.social.variety.Phishing,13.0
+action.social.variety.Phishing,14.0
+action.social.variety.Phishing,2.0
+action.social.variety.Phishing,9.0
+action.social.vector.Email,13.0
+action.social.vector.Email,14.0
+action.social.vector.Email,2.0
+action.social.vector.Email,9.0
+action.social.vector.Website,13.0
+action.social.vector.Website,14.0
+action.social.vector.Website,2.0
+action.social.vector.Website,9.0
