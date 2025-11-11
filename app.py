@@ -843,20 +843,55 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
                 account_id = row.get('account_id', f'Account_{idx}')
                 
                 account_net_worth = pd.to_numeric(row.get('net_worth', 100e6), errors='coerce')
-                account_lam = pd.to_numeric(row.get('lam', 2.0), errors='coerce')
-                account_p_any = pd.to_numeric(row.get('p_any', 0.7), errors='coerce')
+                account_lam       = pd.to_numeric(row.get('lam', 2.0), errors='coerce')
+                account_p_any     = pd.to_numeric(row.get('p_any', 0.7), errors='coerce')
                 
                 # Validate and clamp to sensible ranges
                 account_net_worth = float(account_net_worth if np.isfinite(account_net_worth) else 100e6)
-                account_lam = float(account_lam if np.isfinite(account_lam) else 2.0)
-                account_p_any = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
+                account_lam       = float(account_lam if np.isfinite(account_lam) else 2.0)
+                account_p_any     = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
                 
-                # Run simulation for this account
+                # Per-account config and frequency
                 cfg_account = ModelConfig(
                     trials=cfg.trials, 
                     net_worth=account_net_worth, 
-                    seed=_stable_seed_from(account_id, base=cfg.seed)
+                    seed=_stable_seed_from(account_id, base=cfg.seed),
+                    record_cap=cfg.record_cap,
+                    cost_per_record=cfg.cost_per_record
                 )
+                fp_account = FreqParams(
+                    lam=account_lam,
+                    p_any=account_p_any,
+                    negbin=fp.negbin,
+                    r=fp.r
+                )
+                
+                # Use the same severity params 'sp' selected in the sidebar
+                losses_account  = cached_simulate(asdict(cfg_account), asdict(fp_account), asdict(sp))
+                metrics_account = compute_metrics(losses_account, account_net_worth)
+                
+                results.append({
+                    'account_id': account_id,
+                    'EAL': metrics_account['EAL'],
+                    'VaR95': metrics_account['VaR95'],
+                    'VaR99': metrics_account['VaR99'],
+                    'P(Ruin)': metrics_account['P(Ruin)']
+                })
+                
+                progress_bar.progress((idx + 1) / len(df))
+            
+            results_df = pd.DataFrame(results)
+            st.success("✓ Portfolio analysis complete!")
+            st.dataframe(results_df, use_container_width=True)
+            
+            # Download results
+            csv = results_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download Results CSV",
+                data=csv,
+                file_name="portfolio_results.csv",
+                mime="text/csv"
+            )
 
 # ============================================================================
 # SANITY CHECK GUIDE
@@ -864,22 +899,23 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
 
 with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
     st.markdown("""
-**Expected Behaviors:**
-
+**Expected behaviors (monetary model):**
 - Turning **External monitoring** on should drop **λ** and modestly shrink tails.
 - Increasing **σ** raises **VaR95/99** more than **EAL** (fatter body/tail).
 - With **NegBin**, lowering **r** raises tail risk more than mean frequency.
 - **ξ ≥ 1** ⇒ infinite mean tail; keep **ξ < 0.5** for realistic cyber losses.
-- **Server hardening** should have strongest effect when hacking/web app patterns dominate.
+- **Server hardening** strongest when hacking/web app patterns dominate.
 - **Media encryption** primarily helps with physical asset loss patterns.
 - **Control isolation** shows standalone value; **marginal ROI** shows incremental value from current bundle.
 
 **Records-based model:**
-- Higher **records μ** shifts the entire distribution right (more records per incident).
-- Higher **records σ** increases variability — occasional mega-breaches become more likely.
-- **Cost per record** scales linearly with total loss. Typical range: $100-$300 for PII/PHI.
-- **Record cap** truncates tail; useful for modeling contractual limits or technical constraints.
+- Higher **records μ** shifts the whole distribution right (more records per incident).
+- Higher **records σ** increases variability—mega-breaches more likely.
+- **Cost per record** scales linearly with loss (typical $100–$300 for PII/PHI).
+- **Record cap** truncates the tail; VaR can drop materially when capped.
 """)
+
+
                 fp_account = FreqParams(lam=account_lam, p_any=account_p_any, 
                                        negbin=fp.negbin, r=fp.r)
                 
