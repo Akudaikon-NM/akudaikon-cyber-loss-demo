@@ -536,7 +536,7 @@ else:
     p_any_mult = float(np.clip(p_any_mult, 0.2, 1.0))
     gpd_mult = float(np.clip(gpd_mult, 0.2, 1.0))
     
-    return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_mult)
+return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_mult)
 
 def eal_ci(losses: np.ndarray, n_boot: int = 1000, alpha: float = 0.95):
     """Bootstrap confidence interval for EAL."""
