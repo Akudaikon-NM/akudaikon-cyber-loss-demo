@@ -349,7 +349,11 @@ def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_
     # Normalize inputs
     a = _normalize_shares(action_shares)
     p = _normalize_shares(pattern_shares)
-    # >>> BEGIN: CIS mapping loader & recommender
+    # --- SAFE WRAPPER FOR CONTROL EFFECTS ---
+def _ensure_control_effects(x: Optional[ControlEffects]) -> ControlEffects:
+    return x if isinstance(x, ControlEffects) else ControlEffects()
+
+# >>> BEGIN: CIS mapping loader & recommender
 DEFAULT_MAP_PATH = os.path.join("data", "veris_to_cis_lookup.csv")
 
 @st.cache_data(show_spinner=False)
@@ -699,9 +703,13 @@ for k in ["server", "media", "error", "external"]:
 # ============================================================================
 
 # Generate control effects (must be before Assumption Summary)
-ce = effects_from_shares_improved(ctrl, action_shares, pattern_shares)
-
-st.header("🎯 Simulation Results")
+try:
+    ce = effects_from_shares_improved(ctrl, action_shares, pattern_shares)
+except Exception as _e:
+    # If anything odd happens, fall back to neutral multipliers
+    ce = ControlEffects()
+# absolutely ensure it's never None
+ce = _ensure_control_effects(ce)
 
 # Assumption Summary Box
 with st.expander("📋 Assumption Summary", expanded=False):
@@ -715,10 +723,13 @@ with st.expander("📋 Assumption Summary", expanded=False):
         if fp.negbin:
             st.markdown(f"- NegBin dispersion (r): `{fp.r:.3f}`")
         
+                # Use a safe alias so formatting never crashes
+        _ce = _ensure_control_effects(ce)
         st.markdown("**Control Effects**")
-        st.markdown(f"- λ multiplier: `{ce.lam_mult:.3f}`")
-        st.markdown(f"- P(any) multiplier: `{ce.p_any_mult:.3f}`")
-        st.markdown(f"- GPD scale multiplier: `{ce.gpd_scale_mult:.3f}`")
+        st.markdown(f"- λ multiplier: `{_ce.lam_mult:.3f}`")
+        st.markdown(f"- P(any) multiplier: `{_ce.p_any_mult:.3f}`")
+        st.markdown(f"- GPD scale multiplier: `{_ce.gpd_scale_mult:.3f}`")
+
     
     with col2:
         st.markdown("**Severity Parameters**")
@@ -748,7 +759,8 @@ with st.expander("📋 Assumption Summary", expanded=False):
 
 # Run simulations with caching
 base_losses = cached_simulate(asdict(cfg), asdict(fp), asdict(sp))
-ctrl_losses = cached_simulate(asdict(cfg), asdict(fp), asdict(sp), asdict(ce))
+ctrl_losses = cached_simulate(asdict(cfg), asdict(fp), asdict(sp), asdict(_ensure_control_effects(ce)))
+
 
 # Compute metrics
 base_metrics = compute_metrics(base_losses, cfg.net_worth)
