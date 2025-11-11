@@ -2,22 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, is_dataclass
 from typing import Optional
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import lognorm
-from dataclasses import is_dataclass  # add
 import os
-
-def _to_dict(x):
-    """Return a plain dict whether x is a dataclass or already a dict."""
-    if is_dataclass(x):
-        return asdict(x)
-    if isinstance(x, dict):
-        return x
-    # last-ditch: fall back to __dict__ if present
-    return dict(x.__dict__) if hasattr(x, "__dict__") else x
 
 # KEEP this one at the very top (already there)
 st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
@@ -25,6 +15,7 @@ st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
 # Title and caption (removed duplicate set_page_config)
 st.title("Akudaikon | Cyber-Loss Demo")
 st.caption("Monte Carlo loss model with control ROI, diagnostics, and optional Bayesian frequency.")
+
 # >>> BEGIN: Help & How-To
 with st.expander("❓ Help & How to Use This App", expanded=False):
     st.markdown("""
@@ -80,7 +71,7 @@ It also quantifies **control ROI** by comparing **ΔEAL** to your **annual contr
 - Each control **by itself** (others off): ΔEAL, Benefit per $, and ROSI%.
 
 **🧩 Marginal ROI**
-- From your **current** bundle, shows the next control’s **incremental** ΔEAL and marginal ROSI%.
+- From your **current** bundle, shows the next control's **incremental** ΔEAL and marginal ROSI%.
 
 **📊 Distributions**
 - **LEC** (log–log) for Baseline vs Controlled.  
@@ -102,27 +93,6 @@ It also quantifies **control ROI** by comparing **ΔEAL** to your **annual contr
 # >>> END: Help & How-To
 
 # ============================================================================
-# SANITY CHECKS / EXPECTED BEHAVIORS
-# ============================================================================
-# What to look for in outputs:
-# 
-# 1. With all controls off, turning only 'external' on should drop EAL primarily 
-#    through λ reduction, with a modest tail effect (gpd_mult *= 0.85).
-#
-# 2. Increasing σ from 1.5 → 2.5 should push VaR95/VaR99 up noticeably, even if 
-#    EAL moves less—lognormal fattening is mostly a tail story.
-#
-# 3. For NegBin: decreasing r from 3 → 1 (holding λ) should lift VaR more than 
-#    EAL (over-dispersion increases tail probability).
-#
-# 4. Control isolation analysis should show which controls provide best ROSI. 
-#    Typically external monitoring and server hardening have strong λ effects.
-#
-# 5. GPD shape ξ ≥ 1.0 yields infinite mean tail—results will be unstable. 
-#    Keep ξ < 0.5 for realistic cyber losses.
-# ============================================================================
-
-# ============================================================================
 # DATA CLASSES
 # ============================================================================
 
@@ -132,7 +102,7 @@ class ModelConfig:
     net_worth: float = 100e6
     seed: int = 42
     record_cap: int = 0
-    cost_per_record: float = 0.0
+    cost_per_record: float = 150.0
 
 @dataclass
 class FreqParams:
@@ -201,21 +171,148 @@ DEFAULT_PATTERN_SHARES = {
     "Miscellaneous Errors": 0.02
 }
 
-ACTION_LOSS_PROPENSITY = {
-    "hacking": 0.72,
-    "malware": 0.68,
-    "social": 0.65,
-    "misuse": 0.58,
-    "physical": 0.45,
-    "error": 0.55
-}
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
 
-PATTERN_TAIL_MULTIPLIERS = {
-    "Web Applications": 1.2,
-    "Privilege Misuse": 1.5,
-    "Crimeware": 1.3,
-    "Payment Card Skimmers": 0.9
-}
+def _to_dict(x):
+    """Return a plain dict whether x is a dataclass or already a dict."""
+    if is_dataclass(x):
+        return asdict(x)
+    if isinstance(x, dict):
+        return x
+    return dict(x.__dict__) if hasattr(x, "__dict__") else x
+
+def _ensure_control_effects(ce):
+    """Ensure ce is a valid ControlEffects object."""
+    if ce is None or not hasattr(ce, 'lam_mult'):
+        return ControlEffects()
+    return ce
+
+def _normalize_shares(shares: dict) -> dict:
+    """Normalize shares to sum to 1."""
+    total = sum(shares.values())
+    return {k: v/total for k, v in shares.items()} if total > 0 else shares
+
+def _stable_seed_from(s: str, base: int = 0):
+    """Generate consistent seed from string ID."""
+    return base + (abs(hash(str(s))) % 10000)
+
+# ============================================================================
+# CIS MAPPING (VERIS -> CIS)
+# ============================================================================
+
+def load_cis_mapping():
+    """
+    Loads a CSV with mappings from VERIS 'action'/'pattern' to CIS controls.
+    Returns: dict with {"loaded": bool, "action": {k:[...ids]}, "pattern": {k:[...ids]}}
+    """
+    paths = ["data/veris_to_cis_lookup.csv", "veris_to_cis_lookup.csv"]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                df = pd.read_csv(p)
+                cols = {c.lower(): c for c in df.columns}
+                
+                veris_cols = [c for c in ["action", "pattern", "veris", "veris_key"] if c in cols]
+                cis_id_col = next((cols[c] for c in ["cis", "cis_control", "cis_id", "cis_v8_id"] if c in cols), None)
+                cis_title_col = next((cols[c] for c in ["cis_title", "cis_name", "title", "name"] if c in cols), None)
+
+                amap, pmap = {}, {}
+                for _, row in df.iterrows():
+                    veris_val = None
+                    for vc in veris_cols:
+                        v = str(row.get(cols[vc])).strip() if pd.notna(row.get(cols[vc])) else None
+                        if v:
+                            veris_val = v
+                            break
+                    if not veris_val:
+                        continue
+
+                    cis_id = str(row.get(cis_id_col)).strip() if cis_id_col and pd.notna(row.get(cis_id_col)) else ""
+                    cis_title = str(row.get(cis_title_col)).strip() if cis_title_col and pd.notna(row.get(cis_title_col)) else ""
+                    cis_display = (f"{cis_id} – {cis_title}".strip(" –")) if cis_id or cis_title else ""
+
+                    key_lower = veris_val.lower()
+                    if key_lower in [k.lower() for k in DEFAULT_ACTION_SHARES.keys()]:
+                        amap.setdefault(veris_val, set()).add(cis_display or cis_id)
+                    elif key_lower in [k.lower() for k in DEFAULT_PATTERN_SHARES.keys()]:
+                        pmap.setdefault(veris_val, set()).add(cis_display or cis_id)
+                    else:
+                        amap.setdefault(veris_val, set()).add(cis_display or cis_id)
+                        pmap.setdefault(veris_val, set()).add(cis_display or cis_id)
+
+                amap = {k: sorted([x for x in v if x]) for k, v in amap.items()}
+                pmap = {k: sorted([x for x in v if x]) for k, v in pmap.items()}
+                return {"loaded": True, "action": amap, "pattern": pmap, "path": p}
+            except Exception as e:
+                st.sidebar.warning(f"Failed to read CIS mapping CSV: {e}")
+                break
+    return {"loaded": False, "action": {}, "pattern": {}, "path": None}
+
+def cis_for_profile(action_shares, pattern_shares, cis_map, action_thresh=0.10, pattern_thresh=0.10, top_n=15):
+    """Aggregate CIS controls for the current action/pattern mix."""
+    if not cis_map.get("loaded"):
+        return []
+    out = set()
+    for a, s in action_shares.items():
+        if s >= action_thresh and a in cis_map["action"]:
+            out.update(cis_map["action"][a])
+    for p, s in pattern_shares.items():
+        if s >= pattern_thresh and p in cis_map["pattern"]:
+            out.update(cis_map["pattern"][p])
+    return sorted(list(out))[:top_n]
+
+def cis_for_control(control_name, cis_map):
+    """Return CIS controls suggested for a specific control category."""
+    if not cis_map.get("loaded"):
+        return ""
+    
+    # Map our control names to patterns/actions
+    mapping = {
+        "server": ["hacking", "Web Applications"],
+        "media": ["physical", "Lost and Stolen Assets"],
+        "error": ["error", "Miscellaneous Errors"],
+        "external": ["hacking", "misuse", "Privilege Misuse"]
+    }
+    
+    suggestions = set()
+    for key in mapping.get(control_name, []):
+        suggestions.update(cis_map["action"].get(key, []))
+        suggestions.update(cis_map["pattern"].get(key, []))
+    
+    return ", ".join(sorted(list(suggestions))[:3]) if suggestions else "—"
+
+def rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10):
+    """Rank CIS controls by relevance to current action/pattern mix."""
+    if not cis_map or not cis_map.get("loaded"):
+        return pd.DataFrame(columns=["CIS Control", "Score", "Why"])
+
+    a = _normalize_shares(action_shares)
+    p = _normalize_shares(pattern_shares)
+
+    scores = {}
+    reasons = {}
+
+    for a_key, w in a.items():
+        for cis in cis_map["action"].get(a_key, []):
+            scores[cis] = scores.get(cis, 0.0) + 1.0 * w
+            reasons.setdefault(cis, []).append(f"action:{a_key} ({w:.0%})")
+
+    for p_key, w in p.items():
+        for cis in cis_map["pattern"].get(p_key, []):
+            scores[cis] = scores.get(cis, 0.0) + 0.8 * w
+            reasons.setdefault(cis, []).append(f"pattern:{p_key} ({w:.0%})")
+
+    if not scores:
+        return pd.DataFrame(columns=["CIS Control", "Score", "Why"])
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    rows = [
+        {"CIS Control": cis, "Score": score, "Why": "; ".join(reasons.get(cis, []))}
+        for cis, score in ranked
+    ]
+    return pd.DataFrame(rows)
 
 # ============================================================================
 # SIMULATION FUNCTIONS
@@ -226,22 +323,17 @@ def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams,
     """Simulate annual cyber losses with optional controls."""
     np.random.seed(cfg.seed)
     
-    # Apply control effects
     lam_eff = fp.lam * (ce.lam_mult if ce else 1.0)
     p_any_eff = fp.p_any * (ce.p_any_mult if ce else 1.0)
     gpd_scale_eff = sp.gpd_scale * (ce.gpd_scale_mult if ce else 1.0)
     
-    # Precompute dollar threshold once per call (outside the loops)
     if not sp.use_records:
-        # Better (and simpler) using scipy.stats.lognorm
         body_thresh_val = float(lognorm(s=sp.sigma, scale=np.exp(sp.mu)).ppf(sp.gpd_thresh_q))
     
     annual_losses = np.zeros(cfg.trials)
     
     for i in range(cfg.trials):
-        # Generate incident count
         if fp.negbin:
-            # Gamma-Poisson mixture: K ~ Poisson(L), L ~ Gamma(shape=r, scale=lam_eff/r)
             L = np.random.gamma(shape=fp.r, scale=lam_eff / fp.r)
             n_incidents = np.random.poisson(L)
         else:
@@ -250,34 +342,26 @@ def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams,
         if n_incidents == 0:
             continue
         
-        # Generate losses for each incident
         for _ in range(n_incidents):
-            # Determine if loss occurs
             if np.random.random() > p_any_eff:
                 continue
             
             if sp.use_records:
-                # Records-based loss model
                 n_records = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
                 if cfg.record_cap > 0:
                     n_records = min(n_records, cfg.record_cap)
                 loss = n_records * sp.cost_per_record
             else:
-                # Monetary severity model (lognormal body + GPD tail)
                 u = np.random.random()
                 if u < sp.gpd_thresh_q:
-                    # Body (lognormal)
                     loss = np.exp(np.random.normal(sp.mu, sp.sigma))
                 else:
-                    # Tail (GPD on excess over threshold)
-                    u_tail = np.random.random()  # fresh uniform for the tail
+                    u_tail = np.random.random()
                     xi = sp.gpd_shape
                     beta = gpd_scale_eff
                     if xi == 0.0:
-                        # Exponential tail on excess
                         excess = np.random.exponential(beta)
                     else:
-                        # Inverse CDF of GPD
                         excess = beta * (u_tail**(-xi) - 1.0) / xi
                     loss = body_thresh_val + max(0.0, excess)
             
@@ -312,6 +396,16 @@ def var_confidence_interval(losses: np.ndarray, alpha: float, n_boot: int = 1000
         "ci_upper": np.percentile(boot_vars, 97.5)
     }
 
+def eal_ci(losses: np.ndarray, n_boot: int = 1000, alpha: float = 0.95):
+    """Bootstrap confidence interval for EAL."""
+    m = len(losses)
+    boots = np.mean(
+        np.random.choice(losses, size=(n_boot, m), replace=True),
+        axis=1
+    )
+    lo, hi = np.percentile(boots, [(1-alpha)/2*100, (1+alpha)/2*100])
+    return float(np.mean(losses)), float(lo), float(hi)
+
 @st.cache_data(show_spinner=False)
 def cached_simulate(cfg_dict, fp_dict, sp_dict, ce_dict=None):
     """Cached simulation wrapper."""
@@ -326,24 +420,20 @@ def lec(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
     losses = np.asarray(losses, float)
     losses = losses[np.isfinite(losses)]
     
-    # Handle all-zero losses
     if losses.size == 0 or np.all(losses == 0):
         return pd.DataFrame({"Loss": [1.0], "Exceedance_Prob": [0.0]})
     
     losses.sort()
     
-    # Choose log-spaced grid from a small positive to max
     lo = max(1.0, np.percentile(losses[losses > 0], 1) if np.any(losses > 0) else 1.0)
     hi = float(losses[-1])
     if hi <= lo:
         return pd.DataFrame({"Loss": [1.0], "Exceedance_Prob": [0.0]})
     
     grid = np.logspace(np.log10(lo), np.log10(hi), n)
-    
-    # For each grid x, find first index >= x via binary search
     idx = np.searchsorted(losses, grid, side='left')
     ex_prob = 1.0 - idx / float(len(losses))
-    ex_prob = np.clip(ex_prob, 1.0/len(losses), 1.0)  # keep strictly positive
+    ex_prob = np.clip(ex_prob, 1.0/len(losses), 1.0)
     
     return pd.DataFrame({"Loss": grid, "Exceedance_Prob": ex_prob})
 
@@ -352,128 +442,39 @@ def cached_lec(losses, n):
     """Cached LEC calculation."""
     return lec(losses, n=n)
 
-
-# ============================================================================
-# CIS MAPPING (VERIS -> CIS)
-# ============================================================================
-
-def load_cis_mapping():
-    """
-    Loads a CSV with mappings from VERIS 'action'/'pattern' to CIS controls.
-    Supported column names (case-insensitive):
-        - For VERIS keys: 'action', 'pattern', 'veris', 'veris_key'
-        - For CIS id:     'cis', 'cis_control', 'cis_id', 'cis_v8_id'
-        - For CIS title:  'cis_title', 'cis_name', 'title', 'name'
-    Returns: dict with {"loaded": bool, "action": {k:[...ids]}, "pattern": {k:[...ids]}}
-    """
-    paths = ["data/veris_to_cis_lookup.csv", "veris_to_cis_lookup.csv"]
-    for p in paths:
-        if os.path.exists(p):
-            try:
-                df = pd.read_csv(p)
-                cols = {c.lower(): c for c in df.columns}
-                # identify columns
-                veris_cols = [c for c in ["action", "pattern", "veris", "veris_key"] if c in cols]
-                cis_id_col = next((cols[c] for c in ["cis", "cis_control", "cis_id", "cis_v8_id"] if c in cols), None)
-                cis_title_col = next((cols[c] for c in ["cis_title", "cis_name", "title", "name"] if c in cols), None)
-
-                amap, pmap = {}, {}
-                for _, row in df.iterrows():
-                    # pick the first VERIS-like field that is not null
-                    veris_val = None
-                    for vc in veris_cols:
-                        v = str(row.get(cols[vc])).strip() if pd.notna(row.get(cols[vc])) else None
-                        if v:
-                            veris_val = v
-                            break
-                    if not veris_val:
-                        continue
-
-                    cis_id = str(row.get(cis_id_col)).strip() if cis_id_col and pd.notna(row.get(cis_id_col)) else ""
-                    cis_title = str(row.get(cis_title_col)).strip() if cis_title_col and pd.notna(row.get(cis_title_col)) else ""
-                    cis_display = (f"{cis_id} – {cis_title}".strip(" –")) if cis_id or cis_title else ""
-
-                    # place into action or pattern dict depending on exact key match if possible
-                    key_lower = veris_val.lower()
-                    # try to bucket to action vs pattern by name heuristics
-                    # (works with your defaults; still captures generic 'veris')
-                    if key_lower in [k.lower() for k in DEFAULT_ACTION_SHARES.keys()]:
-                        amap.setdefault(veris_val, set()).add(cis_display or cis_id)
-                    elif key_lower in [k.lower() for k in DEFAULT_PATTERN_SHARES.keys()]:
-                        pmap.setdefault(veris_val, set()).add(cis_display or cis_id)
-                    else:
-                        # unknown; put into both buckets so it still shows up
-                        amap.setdefault(veris_val, set()).add(cis_display or cis_id)
-                        pmap.setdefault(veris_val, set()).add(cis_display or cis_id)
-
-                # cast sets to sorted lists
-                amap = {k: sorted([x for x in v if x]) for k, v in amap.items()}
-                pmap = {k: sorted([x for x in v if x]) for k, v in pmap.items()}
-                return {"loaded": True, "action": amap, "pattern": pmap, "path": p}
-            except Exception as e:
-                st.sidebar.warning(f"Failed to read CIS mapping CSV: {e}")
-                break
-    return {"loaded": False, "action": {}, "pattern": {}, "path": None}
-
-
-def cis_for_profile(action_shares, pattern_shares, cis_map, action_thresh=0.10, pattern_thresh=0.10, top_n=15):
-    """Aggregate CIS controls for the current action/pattern mix (threshold = share cutoff)."""
-    if not cis_map.get("loaded"):
-        return []
-    out = set()
-    for a, s in action_shares.items():
-        if s >= action_thresh and a in cis_map["action"]:
-            out.update(cis_map["action"][a])
-    for p, s in pattern_shares.items():
-        if s >= pattern_thresh and p in cis_map["pattern"]:
-            out.update(cis_map["pattern"][p])
-    return sorted(list(out))[:top_n]
-
 def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_shares: dict) -> ControlEffects:
     """Compute control effects from action/pattern shares with data-driven heuristics."""
     a = _normalize_shares(action_shares)
     p = _normalize_shares(pattern_shares)
 
-    lam_mult   = 1.0
+    lam_mult = 1.0
     p_any_mult = 1.0
-    gpd_mult   = 1.0
+    gpd_mult = 1.0
 
-    hack_intensity   = a.get("hacking", 0) + p.get("Web Applications", 0) + p.get("Crimeware", 0)
-    misuse_intensity = a.get("misuse", 0)  + p.get("Privilege Misuse", 0)
-    error_intensity  = a.get("error", 0)   + p.get("Miscellaneous Errors", 0)
-    physical_int     = a.get("physical", 0)+ p.get("Lost and Stolen Assets", 0)
+    hack_intensity = a.get("hacking", 0) + p.get("Web Applications", 0) + p.get("Crimeware", 0)
+    misuse_intensity = a.get("misuse", 0) + p.get("Privilege Misuse", 0)
+    error_intensity = a.get("error", 0) + p.get("Miscellaneous Errors", 0)
+    physical_int = a.get("physical", 0) + p.get("Lost and Stolen Assets", 0)
 
     if ctrl.server:
-        lam_mult   *= (1 - 0.35 * hack_intensity)
+        lam_mult *= (1 - 0.35 * hack_intensity)
         p_any_mult *= (1 - 0.20 * hack_intensity)
-        gpd_mult   *= (1 - 0.15 * hack_intensity)
+        gpd_mult *= (1 - 0.15 * hack_intensity)
     if ctrl.media:
-        lam_mult   *= (1 - 0.25 * physical_int)
+        lam_mult *= (1 - 0.25 * physical_int)
         p_any_mult *= (1 - 0.25 * physical_int)
     if ctrl.error:
-        lam_mult   *= (1 - 0.20 * error_intensity)
+        lam_mult *= (1 - 0.20 * error_intensity)
         p_any_mult *= (1 - 0.25 * error_intensity)
     if ctrl.external:
-        lam_mult   *= (1 - 0.30 * (hack_intensity + misuse_intensity))
-        gpd_mult   *= (1 - 0.20 * (hack_intensity + misuse_intensity))
+        lam_mult *= (1 - 0.30 * (hack_intensity + misuse_intensity))
+        gpd_mult *= (1 - 0.20 * (hack_intensity + misuse_intensity))
 
-    lam_mult   = float(np.clip(lam_mult,   0.2, 1.0))
+    lam_mult = float(np.clip(lam_mult, 0.2, 1.0))
     p_any_mult = float(np.clip(p_any_mult, 0.2, 1.0))
-    gpd_mult   = float(np.clip(gpd_mult,   0.2, 1.0))
+    gpd_mult = float(np.clip(gpd_mult, 0.2, 1.0))
 
     return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_mult)
-
-
-
-def eal_ci(losses: np.ndarray, n_boot: int = 1000, alpha: float = 0.95):
-    """Bootstrap confidence interval for EAL."""
-    m = len(losses)
-    boots = np.mean(
-        np.random.choice(losses, size=(n_boot, m), replace=True),
-        axis=1
-    )
-    lo, hi = np.percentile(boots, [(1-alpha)/2*100, (1+alpha)/2*100])
-    return float(np.mean(losses)), float(lo), float(hi)
 
 def log_hist_figure(losses, title):
     """Create histogram with log-scaled x-axis."""
@@ -492,16 +493,6 @@ def log_hist_figure(losses, title):
     fig.update_xaxes(tickvals=ticks, ticktext=[f"${10**int(t):,.0f}" for t in ticks])
     return fig
 
-def _stable_seed_from(s: str, base: int = 0):
-    """Generate consistent seed from string ID."""
-    # consistent tiny hash → [0, 9999]
-    return base + (abs(hash(str(s))) % 10000)
-
-def _normalize_shares(shares: dict) -> dict:
-    """Normalize shares to sum to 1."""
-    total = sum(shares.values())
-    return {k: v/total for k, v in shares.items()} if total > 0 else shares
-
 # ============================================================================
 # SIDEBAR - PARAMETERS
 # ============================================================================
@@ -513,7 +504,6 @@ with st.sidebar.expander("📁 Load parameter JSON", expanded=False):
     pj = st.file_uploader("Upload parameters.json", type=["json"])
     if pj:
         params = json.load(pj)
-        # Wire in action/pattern shares & tail
         _a = params.get("DEFAULT_ACTION_SHARES") or params.get("defaults", {}).get("action_shares")
         _p = params.get("DEFAULT_PATTERN_SHARES") or params.get("defaults", {}).get("pattern_shares")
         if _a:
@@ -524,6 +514,7 @@ with st.sidebar.expander("📁 Load parameter JSON", expanded=False):
             pattern_shares = _normalize_shares(_p)
             st.session_state["_pattern_shares"] = pattern_shares
             st.success("✓ Pattern shares loaded")
+
 # CIS mapping panel
 with st.sidebar.expander("📚 CIS Mapping (VERIS → CIS)", expanded=False):
     cis_map = load_cis_mapping()
@@ -532,7 +523,6 @@ with st.sidebar.expander("📚 CIS Mapping (VERIS → CIS)", expanded=False):
         st.caption("CIS recommendations will appear with actions/patterns and in ROI tables.")
     else:
         st.info("Add **data/veris_to_cis_lookup.csv** (or root **veris_to_cis_lookup.csv**) to enable CIS recommendations.")
-
 
 # Use loaded shares or defaults
 action_shares = st.session_state.get("_action_shares", DEFAULT_ACTION_SHARES)
@@ -569,7 +559,6 @@ with st.sidebar.expander("🎲 Simulation Config", expanded=True):
     net_worth = st.number_input("Net Worth ($M)", 1.0, 10000.0, 100.0, 10.0) * 1e6
     seed = st.number_input("Random Seed", 0, 9999, 42)
     
-    # Record-related parameters
     st.markdown("**Records Parameters**")
     cost_per_record_input = st.number_input(
         "Cost per record ($)", 
@@ -600,13 +589,11 @@ with st.sidebar.expander("📊 Frequency Parameters", expanded=True):
     if negbin:
         st.caption("ℹ️ Lower r ⇒ more over-dispersion (fatter frequency tails).")
     
-    # Validation warnings
     if p_any < 0.1 or p_any > 0.95:
         st.warning(f"⚠️ p(any loss)={p_any:.2f} is extreme; results may be unstable.")
 
 fp = FreqParams(lam=lam, p_any=p_any, negbin=negbin, r=r)
 
-# Clamp frequency params
 fp.p_any = float(np.clip(fp.p_any, 0.0, 1.0))
 if fp.negbin:
     fp.r = float(max(1e-6, fp.r))
@@ -624,7 +611,6 @@ with st.sidebar.expander("🔬 Bayesian Frequency Update", expanded=False):
                 st.info(f"ℹ️ λ differs from k/T by ≥3× (λ={fp.lam:.3f}, k/T={lam_hat:.3f}). "
                        f"Consider Bayes mode or align values.")
             
-            # Simple Bayesian update (Gamma prior)
             alpha_prior = 2.0
             beta_prior = alpha_prior / lam
             alpha_post = alpha_prior + k_obs
@@ -646,17 +632,14 @@ with st.sidebar.expander("💰 Severity Parameters", expanded=True):
         records_sigma = st.number_input("Records lognormal σ", 0.5, 4.0, 2.0, 0.1,
                                         help="Std dev of log(records)")
         
-        # Use cost_per_record from cfg (set in Simulation Config)
         sp = SevParams(
             use_records=True,
             records_mu=records_mu,
             records_sigma=records_sigma,
-            cost_per_record=cfg.cost_per_record,  # Pull from config
-            # Dummy values for monetary params (not used)
+            cost_per_record=cfg.cost_per_record,
             mu=12.0, sigma=2.0, gpd_thresh_q=0.95, gpd_scale=1e6, gpd_shape=0.3
         )
         
-        # Show expected records distribution
         median_records = int(np.exp(records_mu))
         mean_records = int(np.exp(records_mu + records_sigma**2 / 2))
         st.caption(f"📊 Expected records: median={median_records:,}, mean={mean_records:,}")
@@ -677,14 +660,11 @@ with st.sidebar.expander("💰 Severity Parameters", expanded=True):
             gpd_thresh_q=gpd_thresh_q, 
             gpd_scale=gpd_scale, 
             gpd_shape=gpd_shape,
-            # Dummy values for records params (not used in monetary mode)
             records_mu=10.0, records_sigma=2.0, cost_per_record=cfg.cost_per_record
         )
         
-        # Clamp severity params
         sp.gpd_scale = float(max(1.0, sp.gpd_scale))
         
-        # Severity parameter warnings
         if sp.gpd_shape >= 1.0:
             st.sidebar.warning("⚠️ ξ (GPD shape) ≥ 1 yields infinite mean tail. Results may be unstable.")
         if sp.sigma > 2.5:
@@ -713,7 +693,6 @@ with st.sidebar.expander("💵 Control Costs", expanded=True):
 costs = ControlCosts(server=cost_server, media=cost_media, 
                      error=cost_error, external=cost_external)
 
-# Validate costs
 for k in ["server", "media", "error", "external"]:
     v = getattr(costs, k)
     if v < 0:
@@ -724,14 +703,15 @@ for k in ["server", "media", "error", "external"]:
 # MAIN SIMULATION
 # ============================================================================
 
-# Generate control effects (must be before Assumption Summary)
+# Generate control effects
 try:
     ce = effects_from_shares_improved(ctrl, action_shares, pattern_shares)
-except Exception as _e:
-    # If anything odd happens, fall back to neutral multipliers
+except Exception:
     ce = ControlEffects()
-# absolutely ensure it's never None
+
 ce = _ensure_control_effects(ce)
+
+st.header("🎯 Simulation Results")
 
 # Assumption Summary Box
 with st.expander("📋 Assumption Summary", expanded=False):
@@ -745,52 +725,11 @@ with st.expander("📋 Assumption Summary", expanded=False):
         if fp.negbin:
             st.markdown(f"- NegBin dispersion (r): `{fp.r:.3f}`")
         
-                # Use a safe alias so formatting never crashes
-        _ce = _ensure_control_effects(ce)
-st.markdown("**Control Effects**")
-st.markdown(f"- λ multiplier: `{_ce.lam_mult:.3f}`")
-st.markdown(f"- P(any) multiplier: `{_ce.p_any_mult:.3f}`")
-st.markdown(f"- GPD scale multiplier: `{_ce.gpd_scale_mult:.3f}`")
-
-    a = _normalize_shares(action_shares)
-    p = _normalize_shares(pattern_shares)
-
-    lam_mult  = 1.0
-    p_any_mult= 1.0
-    gpd_mult  = 1.0
-
-    hack_intensity   = a.get("hacking", 0) + p.get("Web Applications", 0) + p.get("Crimeware", 0)
-    misuse_intensity = a.get("misuse", 0)  + p.get("Privilege Misuse", 0)
-    error_intensity  = a.get("error", 0)   + p.get("Miscellaneous Errors", 0)
-    physical_int     = a.get("physical",0) + p.get("Lost and Stolen Assets", 0)
-
-    if ctrl.server:
-        lam_mult  *= (1 - 0.35 * hack_intensity)
-        p_any_mult*= (1 - 0.20 * hack_intensity)
-        gpd_mult  *= (1 - 0.15 * hack_intensity)
-    if ctrl.media:
-        lam_mult  *= (1 - 0.25 * physical_int)
-        p_any_mult*= (1 - 0.25 * physical_int)
-    if ctrl.error:
-        lam_mult  *= (1 - 0.20 * error_intensity)
-        p_any_mult*= (1 - 0.25 * error_intensity)
-    if ctrl.external:
-        lam_mult  *= (1 - 0.30 * (hack_intensity + misuse_intensity))
-        gpd_mult  *= (1 - 0.20 * (hack_intensity + misuse_intensity))
-
-    lam_mult   = float(np.clip(lam_mult,   0.2, 1.0))
-    p_any_mult = float(np.clip(p_any_mult, 0.2, 1.0))
-    gpd_mult   = float(np.clip(gpd_mult,   0.2, 1.0))
-
-    return ControlEffects(lam_mult=lam_mult, p_any_mult=p_any_mult, gpd_scale_mult=gpd_mult)
-        # Use a safe alias so formatting never crashes
         _ce = _ensure_control_effects(ce)
         st.markdown("**Control Effects**")
         st.markdown(f"- λ multiplier: `{_ce.lam_mult:.3f}`")
         st.markdown(f"- P(any) multiplier: `{_ce.p_any_mult:.3f}`")
         st.markdown(f"- GPD scale multiplier: `{_ce.gpd_scale_mult:.3f}`")
-
-
     
     with col2:
         st.markdown("**Severity Parameters**")
@@ -802,7 +741,6 @@ st.markdown(f"- GPD scale multiplier: `{_ce.gpd_scale_mult:.3f}`")
             if cfg.record_cap > 0:
                 st.markdown(f"- Record cap: `{cfg.record_cap:,}`")
             
-            # Show expected losses
             median_records = int(np.exp(sp.records_mu))
             st.markdown(f"- Implied median loss: `${median_records * sp.cost_per_record:,.0f}`")
         else:
@@ -817,22 +755,19 @@ st.markdown(f"- GPD scale multiplier: `{_ce.gpd_scale_mult:.3f}`")
         st.markdown(f"- Monte Carlo trials: `{cfg.trials:,}`")
         st.markdown(f"- Net worth: `${cfg.net_worth:,.0f}`")
         st.markdown(f"- Random seed: `{cfg.seed}`")
+
 # CIS recommendations for the current action/pattern mix
 if cis_map.get("loaded"):
     st.subheader("🔗 CIS Recommendations for Current Mix")
     cis_list = cis_for_profile(action_shares, pattern_shares, cis_map, action_thresh=0.10, pattern_thresh=0.10, top_n=20)
     if cis_list:
-        st.markdown(
-            "- " + "\n- ".join(cis_list)
-        )
+        st.markdown("- " + "\n- ".join(cis_list))
     else:
-        st.caption("No CIS recommendations triggered at current thresholds (raise dominant actions/patterns or lower thresholds).")
+        st.caption("No CIS recommendations triggered at current thresholds.")
 
 # Run simulations with caching
 base_losses = cached_simulate(_to_dict(cfg), _to_dict(fp), _to_dict(sp))
 ctrl_losses = cached_simulate(_to_dict(cfg), _to_dict(fp), _to_dict(sp), _to_dict(ce))
-
-
 
 # Compute metrics
 base_metrics = compute_metrics(base_losses, cfg.net_worth)
@@ -908,8 +843,6 @@ st.header("🔬 Control Isolation Analysis")
 st.caption("Individual control effectiveness (all others off)")
 
 baseline_eal = base_metrics['EAL']
-
-# Fixed seed bumps for reproducibility
 _iso_seed_bumps = {"server": 101, "media": 202, "error": 303, "external": 404}
 
 iso = []
@@ -917,13 +850,14 @@ for name in ["server", "media", "error", "external"]:
     ctrl_iso = ControlSet(**{k: (k == name) for k in ["server", "media", "error", "external"]})
     ce_iso = effects_from_shares_improved(ctrl_iso, action_shares, pattern_shares)
     
-    # Use fixed seed bump for reproducibility
     cfg_iso = ModelConfig(
         trials=cfg.trials, 
         net_worth=cfg.net_worth, 
-        seed=cfg.seed + _iso_seed_bumps[name]
+        seed=cfg.seed + _iso_seed_bumps[name],
+        record_cap=cfg.record_cap,
+        cost_per_record=cfg.cost_per_record
     )
-    losses_iso  = cached_simulate(_to_dict(cfg_iso), _to_dict(fp), _to_dict(sp), _to_dict(ce_iso))
+    losses_iso = cached_simulate(_to_dict(cfg_iso), _to_dict(fp), _to_dict(sp), _to_dict(ce_iso))
     met_iso = compute_metrics(losses_iso, cfg.net_worth)
     
     dEAL = baseline_eal - met_iso["EAL"]
@@ -938,45 +872,6 @@ for name in ["server", "media", "error", "external"]:
         "CIS (suggested)": cis_for_control(name, cis_map)
     })
 
-def rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10):
-    """
-    Rank CIS controls by how strongly they are implied by the current
-    action/pattern mix. Actions get weight 1.0, patterns 0.8 (tweak as you like).
-    Returns a DataFrame with columns: CIS Control | Score | Why.
-    """
-    # Safe empty return if mapping not available
-    if not cis_map or not cis_map.get("loaded"):
-        return pd.DataFrame(columns=["CIS Control", "Score", "Why"])
-
-    # Normalize shares to sum to 1
-    a = _normalize_shares(action_shares)
-    p = _normalize_shares(pattern_shares)
-
-    scores = {}
-    reasons = {}
-
-    # Weight contributions from actions
-    for a_key, w in a.items():
-        for cis in cis_map["action"].get(a_key, []):
-            scores[cis] = scores.get(cis, 0.0) + 1.0 * w
-            reasons.setdefault(cis, []).append(f"action:{a_key} ({w:.0%})")
-
-    # Weight contributions from patterns
-    for p_key, w in p.items():
-        for cis in cis_map["pattern"].get(p_key, []):
-            scores[cis] = scores.get(cis, 0.0) + 0.8 * w   # pattern weight
-            reasons.setdefault(cis, []).append(f"pattern:{p_key} ({w:.0%})")
-
-    if not scores:
-        return pd.DataFrame(columns=["CIS Control", "Score", "Why"])
-
-    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-    rows = [
-        {"CIS Control": cis, "Score": score, "Why": "; ".join(reasons.get(cis, []))}
-        for cis, score in ranked
-    ]
-    return pd.DataFrame(rows)
-
 iso_df = pd.DataFrame(iso).sort_values("Benefit per $", ascending=False)
 
 st.dataframe(
@@ -989,11 +884,9 @@ st.dataframe(
     use_container_width=True
 )
 
-# Download isolation results
 iso_csv = iso_df.to_csv(index=False).encode("utf-8")
 st.download_button("📥 Download Isolation ROI (CSV)", iso_csv, "isolation_roi.csv", "text/csv")
 
-# Find best ROSI (safe for all-NaN)
 if iso_df['ROSI %'].notna().any():
     best_idx = iso_df['ROSI %'].idxmax()
     best = iso_df.loc[best_idx]
@@ -1013,18 +906,17 @@ current_eal = ctrl_metrics['EAL']
 
 marg = []
 for name in ["server", "media", "error", "external"]:
-    if getattr(ctrl, name):  # already in bundle
+    if getattr(ctrl, name):
         continue
     
-    # bundle + this control
     ctrl_plus = ControlSet(**{
         k: (getattr(ctrl, k) or (k == name)) 
         for k in ["server", "media", "error", "external"]
     })
     ce_plus = effects_from_shares_improved(ctrl_plus, action_shares, pattern_shares)
-    cfg_plus = ModelConfig(trials=cfg.trials, net_worth=cfg.net_worth, seed=cfg.seed + 777)
+    cfg_plus = ModelConfig(trials=cfg.trials, net_worth=cfg.net_worth, seed=cfg.seed + 777,
+                          record_cap=cfg.record_cap, cost_per_record=cfg.cost_per_record)
     losses_plus = cached_simulate(_to_dict(cfg_plus), _to_dict(fp), _to_dict(sp), _to_dict(ce_plus))
-
     eal_plus = float(np.mean(losses_plus))
     
     dEAL = current_eal - eal_plus
@@ -1038,7 +930,6 @@ for name in ["server", "media", "error", "external"]:
         "CIS (suggested)": cis_for_control(name, cis_map)
     })
 
-
 if marg:
     marg_df = pd.DataFrame(marg).sort_values("Marginal ROSI %", ascending=False)
     st.dataframe(
@@ -1049,24 +940,23 @@ if marg:
         }),
         use_container_width=True
     )
-
+    
     marg_csv = marg_df.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Download Marginal ROI (CSV)", marg_csv, "marginal_roi.csv", "text/csv")
 else:
     st.info("All controls are already selected; no marginal adds to evaluate.")
 
-# >>> BEGIN: CIS recommendation table
+# CIS recommendation table
 st.subheader("🧭 CIS Control Recommendations (ranked by relevance)")
 cis_rank_df = rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10)
 
 if cis_rank_df.empty:
-    st.info("Add data/veris_to_cis_lookup.csv (or root veris_to_cis_lookup.csv) to enable CIS recommendations.")
+    st.info("Add data/veris_to_cis_lookup.csv to enable CIS recommendations.")
 else:
     st.dataframe(
         cis_rank_df.style.format({"Score": "{:.2f}"}),
         use_container_width=True
     )
-
 
 # ============================================================================
 # VISUALIZATIONS
@@ -1074,7 +964,6 @@ else:
 
 st.header("📊 Loss Distributions")
 
-# Loss exceedance curves
 lec_points = 100
 lec_b = cached_lec(base_losses, lec_points).assign(scenario="Baseline")
 lec_c = cached_lec(ctrl_losses, lec_points).assign(scenario="Controlled")
@@ -1089,12 +978,10 @@ fig_lec.add_hline(y=0.01, line_dash="dot", opacity=0.2)
 fig_lec.add_hline(y=0.001, line_dash="dot", opacity=0.2)
 st.plotly_chart(fig_lec, use_container_width=True)
 
-# Download LEC data
 lec_export = lec_combined.rename(columns={"scenario": "Scenario"})
 lec_csv = lec_export.to_csv(index=False).encode("utf-8")
 st.download_button("📥 Download LEC Points (CSV)", lec_csv, "lec_points.csv", "text/csv")
 
-# Histograms
 col1, col2 = st.columns(2)
 
 with col1:
@@ -1122,19 +1009,16 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
             progress_bar = st.progress(0)
             
             for idx, row in df.iterrows():
-                # Extract parameters from CSV with robust type conversion
                 account_id = row.get('account_id', f'Account_{idx}')
                 
                 account_net_worth = pd.to_numeric(row.get('net_worth', 100e6), errors='coerce')
-                account_lam       = pd.to_numeric(row.get('lam', 2.0), errors='coerce')
-                account_p_any     = pd.to_numeric(row.get('p_any', 0.7), errors='coerce')
+                account_lam = pd.to_numeric(row.get('lam', 2.0), errors='coerce')
+                account_p_any = pd.to_numeric(row.get('p_any', 0.7), errors='coerce')
                 
-                # Validate and clamp to sensible ranges
                 account_net_worth = float(account_net_worth if np.isfinite(account_net_worth) else 100e6)
-                account_lam       = float(account_lam if np.isfinite(account_lam) else 2.0)
-                account_p_any     = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
+                account_lam = float(account_lam if np.isfinite(account_lam) else 2.0)
+                account_p_any = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
                 
-                # Per-account config and frequency
                 cfg_account = ModelConfig(
                     trials=cfg.trials, 
                     net_worth=account_net_worth, 
@@ -1149,9 +1033,7 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
                     r=fp.r
                 )
                 
-                # Use the same severity params 'sp' selected in the sidebar
-                losses_account  = cached_simulate(_to_dict(cfg_account), _to_dict(fp_account), _to_dict(sp))
-
+                losses_account = cached_simulate(_to_dict(cfg_account), _to_dict(fp_account), _to_dict(sp))
                 metrics_account = compute_metrics(losses_account, account_net_worth)
                 
                 results.append({
@@ -1168,7 +1050,6 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
             st.success("✓ Portfolio analysis complete!")
             st.dataframe(results_df, use_container_width=True)
             
-            # Download results
             csv = results_df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 label="📥 Download Results CSV",
@@ -1176,6 +1057,10 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
                 file_name="portfolio_results.csv",
                 mime="text/csv"
             )
+
+# ============================================================================
+# SANITY CHECK GUIDE
+# ============================================================================
 
 with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
     st.markdown("""
