@@ -863,9 +863,7 @@ for name in ["server", "media", "error", "external"]:
         net_worth=cfg.net_worth, 
         seed=cfg.seed + _iso_seed_bumps[name]
     )
-   losses_iso  = cached_simulate(_to_dict(cfg_iso), _to_dict(fp), _to_dict(sp), _to_dict(ce_iso))
-
-
+    losses_iso  = cached_simulate(_to_dict(cfg_iso), _to_dict(fp), _to_dict(sp), _to_dict(ce_iso))
     met_iso = compute_metrics(losses_iso, cfg.net_worth)
     
     dEAL = baseline_eal - met_iso["EAL"]
