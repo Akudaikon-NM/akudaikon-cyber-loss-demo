@@ -607,15 +607,15 @@ with st.sidebar.expander("📁 Load parameter JSON", expanded=False):
             pattern_shares = _normalize_shares(_p)
             st.session_state["_pattern_shares"] = pattern_shares
             st.success("✓ Pattern shares loaded")
-# >>> BEGIN: Sidebar CIS mapping viewer
+# CIS mapping panel
 with st.sidebar.expander("📚 CIS Mapping (VERIS → CIS)", expanded=False):
-    cis_map = load_veris_to_cis()
-    if cis_map is None:
-        st.info("Add **data/veris_to_cis_lookup.csv** to enable CIS recommendations.")
+    cis_map = load_cis_mapping()
+    if cis_map["loaded"]:
+        st.success(f"✓ CIS mapping loaded from {cis_map['path']}")
+        st.caption("CIS recommendations will appear with actions/patterns and in ROI tables.")
     else:
-        st.caption(f"Loaded CIS mapping: {len(cis_map):,} rows")
-        st.dataframe(cis_map.head(10), use_container_width=True)
-# >>> END: Sidebar CIS mapping viewer
+        st.info("Add **data/veris_to_cis_lookup.csv** (or root **veris_to_cis_lookup.csv**) to enable CIS recommendations.")
+
 
 # Use loaded shares or defaults
 action_shares = st.session_state.get("_action_shares", DEFAULT_ACTION_SHARES)
@@ -861,6 +861,16 @@ with st.expander("📋 Assumption Summary", expanded=False):
         st.markdown(f"- Monte Carlo trials: `{cfg.trials:,}`")
         st.markdown(f"- Net worth: `${cfg.net_worth:,.0f}`")
         st.markdown(f"- Random seed: `{cfg.seed}`")
+# CIS recommendations for the current action/pattern mix
+if cis_map.get("loaded"):
+    st.subheader("🔗 CIS Recommendations for Current Mix")
+    cis_list = cis_for_profile(action_shares, pattern_shares, cis_map, action_thresh=0.10, pattern_thresh=0.10, top_n=20)
+    if cis_list:
+        st.markdown(
+            "- " + "\n- ".join(cis_list)
+        )
+    else:
+        st.caption("No CIS recommendations triggered at current thresholds (raise dominant actions/patterns or lower thresholds).")
 
 # Run simulations with caching
 base_losses = cached_simulate(_to_dict(cfg), _to_dict(fp), _to_dict(sp))
@@ -963,13 +973,15 @@ for name in ["server", "media", "error", "external"]:
     dEAL = baseline_eal - met_iso["EAL"]
     cost = getattr(costs, name)
     
-    iso.append({
+        iso.append({
         "Control": name.title(),
         "ΔEAL ($/yr)": dEAL,
         "Cost ($/yr)": cost,
         "Benefit per $": (dEAL / cost) if cost > 0 else np.nan,
-        "ROSI %": ((dEAL - cost) / cost * 100) if cost > 0 else np.nan
+        "ROSI %": ((dEAL - cost) / cost * 100) if cost > 0 else np.nan,
+        "CIS (suggested)": cis_for_control(name, cis_map)
     })
+
 
 iso_df = pd.DataFrame(iso).sort_values("Benefit per $", ascending=False)
 
@@ -1024,23 +1036,27 @@ for name in ["server", "media", "error", "external"]:
     dEAL = current_eal - eal_plus
     cost = getattr(costs, name)
     
-    marg.append({
+        marg.append({
         "Add": name.title(),
         "ΔEAL from bundle ($/yr)": dEAL,
         "Incremental Cost ($/yr)": cost,
-        "Marginal ROSI %": ((dEAL - cost) / cost * 100) if cost > 0 else np.nan
+        "Marginal ROSI %": ((dEAL - cost) / cost * 100) if cost > 0 else np.nan,
+        "CIS (suggested)": cis_for_control(name, cis_map)
     })
+
 
 if marg:
     marg_df = pd.DataFrame(marg).sort_values("Marginal ROSI %", ascending=False)
     st.dataframe(
-        marg_df.style.format({
-            "ΔEAL from bundle ($/yr)": "${:,.0f}",
-            "Incremental Cost ($/yr)": "${:,.0f}",
-            "Marginal ROSI %": "{:.1f}%"
-        }),
-        use_container_width=True
-    )
+    iso_df.style.format({
+        "ΔEAL ($/yr)": "${:,.0f}",
+        "Cost ($/yr)": "${:,.0f}",
+        "Benefit per $": "{:,.2f}",
+        "ROSI %": "{:.1f}%"
+    }),
+    use_container_width=True
+)
+
     
     # Download marginal results
     marg_csv = marg_df.to_csv(index=False).encode("utf-8")
