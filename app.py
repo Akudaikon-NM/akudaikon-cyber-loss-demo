@@ -973,7 +973,7 @@ for name in ["server", "media", "error", "external"]:
     dEAL = baseline_eal - met_iso["EAL"]
     cost = getattr(costs, name)
     
-        iso.append({
+    iso.append({
         "Control": name.title(),
         "ΔEAL ($/yr)": dEAL,
         "Cost ($/yr)": cost,
