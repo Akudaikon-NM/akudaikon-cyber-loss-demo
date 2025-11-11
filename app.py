@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import lognorm
 from dataclasses import is_dataclass  # add
+import os
 
 def _to_dict(x):
     """Return a plain dict whether x is a dataclass or already a dict."""
@@ -17,10 +18,6 @@ def _to_dict(x):
         return x
     # last-ditch: fall back to __dict__ if present
     return dict(x.__dict__) if hasattr(x, "__dict__") else x
-
-# >>> BEGIN: extra imports
-import os
-# >>> END: extra imports
 
 # KEEP this one at the very top (already there)
 st.set_page_config(page_title="Akudaikon | Cyber-Loss Demo", layout="wide")
@@ -363,6 +360,103 @@ def effects_from_shares_improved(ctrl: ControlSet, action_shares: dict, pattern_
     # --- SAFE WRAPPER FOR CONTROL EFFECTS ---
 def _ensure_control_effects(x: Optional[ControlEffects]) -> ControlEffects:
     return x if isinstance(x, ControlEffects) else ControlEffects()
+# ============================================================================
+# CIS MAPPING (VERIS -> CIS)
+# ============================================================================
+
+def load_cis_mapping():
+    """
+    Loads a CSV with mappings from VERIS 'action'/'pattern' to CIS controls.
+    Supported column names (case-insensitive):
+        - For VERIS keys: 'action', 'pattern', 'veris', 'veris_key'
+        - For CIS id:     'cis', 'cis_control', 'cis_id', 'cis_v8_id'
+        - For CIS title:  'cis_title', 'cis_name', 'title', 'name'
+    Returns: dict with {"loaded": bool, "action": {k:[...ids]}, "pattern": {k:[...ids]}}
+    """
+    paths = ["data/veris_to_cis_lookup.csv", "veris_to_cis_lookup.csv"]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                df = pd.read_csv(p)
+                cols = {c.lower(): c for c in df.columns}
+                # identify columns
+                veris_cols = [c for c in ["action", "pattern", "veris", "veris_key"] if c in cols]
+                cis_id_col = next((cols[c] for c in ["cis", "cis_control", "cis_id", "cis_v8_id"] if c in cols), None)
+                cis_title_col = next((cols[c] for c in ["cis_title", "cis_name", "title", "name"] if c in cols), None)
+
+                amap, pmap = {}, {}
+                for _, row in df.iterrows():
+                    # pick the first VERIS-like field that is not null
+                    veris_val = None
+                    for vc in veris_cols:
+                        v = str(row.get(cols[vc])).strip() if pd.notna(row.get(cols[vc])) else None
+                        if v:
+                            veris_val = v
+                            break
+                    if not veris_val:
+                        continue
+
+                    cis_id = str(row.get(cis_id_col)).strip() if cis_id_col and pd.notna(row.get(cis_id_col)) else ""
+                    cis_title = str(row.get(cis_title_col)).strip() if cis_title_col and pd.notna(row.get(cis_title_col)) else ""
+                    cis_display = (f"{cis_id} – {cis_title}".strip(" –")) if cis_id or cis_title else ""
+
+                    # place into action or pattern dict depending on exact key match if possible
+                    key_lower = veris_val.lower()
+                    # try to bucket to action vs pattern by name heuristics
+                    # (works with your defaults; still captures generic 'veris')
+                    if key_lower in [k.lower() for k in DEFAULT_ACTION_SHARES.keys()]:
+                        amap.setdefault(veris_val, set()).add(cis_display or cis_id)
+                    elif key_lower in [k.lower() for k in DEFAULT_PATTERN_SHARES.keys()]:
+                        pmap.setdefault(veris_val, set()).add(cis_display or cis_id)
+                    else:
+                        # unknown; put into both buckets so it still shows up
+                        amap.setdefault(veris_val, set()).add(cis_display or cis_id)
+                        pmap.setdefault(veris_val, set()).add(cis_display or cis_id)
+
+                # cast sets to sorted lists
+                amap = {k: sorted([x for x in v if x]) for k, v in amap.items()}
+                pmap = {k: sorted([x for x in v if x]) for k, v in pmap.items()}
+                return {"loaded": True, "action": amap, "pattern": pmap, "path": p}
+            except Exception as e:
+                st.sidebar.warning(f"Failed to read CIS mapping CSV: {e}")
+                break
+    return {"loaded": False, "action": {}, "pattern": {}, "path": None}
+
+
+def cis_for_profile(action_shares, pattern_shares, cis_map, action_thresh=0.10, pattern_thresh=0.10, top_n=15):
+    """Aggregate CIS controls for the current action/pattern mix (threshold = share cutoff)."""
+    if not cis_map.get("loaded"):
+        return []
+    out = set()
+    for a, s in action_shares.items():
+        if s >= action_thresh and a in cis_map["action"]:
+            out.update(cis_map["action"][a])
+    for p, s in pattern_shares.items():
+        if s >= pattern_thresh and p in cis_map["pattern"]:
+            out.update(cis_map["pattern"][p])
+    return sorted(list(out))[:top_n]
+
+
+# which VERIS channels each demo control mitigates (used to suggest CIS)
+CONTROL_TO_VERIS_KEYS = {
+    "server":   ["hacking", "Web Applications", "Crimeware"],
+    "media":    ["physical", "Lost and Stolen Assets"],
+    "error":    ["error", "Miscellaneous Errors"],
+    "external": ["hacking", "Web Applications", "Crimeware", "Privilege Misuse"],
+}
+
+def cis_for_control(control_name, cis_map, limit=8):
+    """Return CIS list for a given demo control based on VERIS channels it mitigates."""
+    if not cis_map.get("loaded"):
+        return ""
+    keys = CONTROL_TO_VERIS_KEYS.get(control_name, [])
+    out = set()
+    for k in keys:
+        if k in cis_map["action"]:
+            out.update(cis_map["action"][k])
+        if k in cis_map["pattern"]:
+            out.update(cis_map["pattern"][k])
+    return ", ".join(sorted(list(out))[:limit])
 
 # >>> BEGIN: CIS mapping loader & recommender
 DEFAULT_MAP_PATH = os.path.join("data", "veris_to_cis_lookup.csv")
