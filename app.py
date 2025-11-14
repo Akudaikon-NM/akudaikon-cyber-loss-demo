@@ -1044,6 +1044,96 @@ base_metrics_ins = compute_metrics(base_net, cfg.net_worth)   # net of terms
 ctrl_metrics_ins = compute_metrics(ctrl_net, cfg.net_worth)
 
 st.caption("📜 Policy Layer active: metrics below include annual retention/limit/coinsurance (insurer net).")
+# --- Insured Net metrics + CSV export (NEW) ---
+
+# Insured pays whatever the insurer doesn't (gross − insurer_net); never negative.
+base_insured = np.maximum(base_losses - base_net, 0.0)
+ctrl_insured = np.maximum(ctrl_losses - ctrl_net, 0.0)
+
+base_metrics_insured = compute_metrics(base_insured, cfg.net_worth)
+ctrl_metrics_insured = compute_metrics(ctrl_insured, cfg.net_worth)
+
+# Toggle to show side-by-side Net metrics
+show_insured = st.checkbox("Show Insured Net metrics (side-by-side)", value=True)
+
+if show_insured:
+    st.subheader("🧾 Net Metrics — Insurer vs Insured (after annual terms)")
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("**Insurer Net**")
+        ins_df = pd.DataFrame({
+            "Metric": ["EAL", "VaR95", "VaR99", "CVaR95", "Max Loss", "P(Ruin)"],
+            "Baseline": [
+                base_metrics_ins["EAL"], base_metrics_ins["VaR95"], base_metrics_ins["VaR99"],
+                base_metrics_ins["CVaR95"], base_metrics_ins["Max"], base_metrics_ins["P(Ruin)"]
+            ],
+            "Controlled": [
+                ctrl_metrics_ins["EAL"], ctrl_metrics_ins["VaR95"], ctrl_metrics_ins["VaR99"],
+                ctrl_metrics_ins["CVaR95"], ctrl_metrics_ins["Max"], ctrl_metrics_ins["P(Ruin)"]
+            ],
+        })
+        st.dataframe(
+            ins_df.style.format({"Baseline": "${:,.2f}", "Controlled": "${:,.2f}"}).hide(axis="index"),
+            use_container_width=True
+        )
+
+    with c2:
+        st.markdown("**Insured Net**")
+        insured_df = pd.DataFrame({
+            "Metric": ["EAL", "VaR95", "VaR99", "CVaR95", "Max Loss", "P(Ruin)"],
+            "Baseline": [
+                base_metrics_insured["EAL"], base_metrics_insured["VaR95"], base_metrics_insured["VaR99"],
+                base_metrics_insured["CVaR95"], base_metrics_insured["Max"], base_metrics_insured["P(Ruin)"]
+            ],
+            "Controlled": [
+                ctrl_metrics_insured["EAL"], ctrl_metrics_insured["VaR95"], ctrl_metrics_insured["VaR99"],
+                ctrl_metrics_insured["CVaR95"], ctrl_metrics_insured["Max"], ctrl_metrics_insured["P(Ruin)"]
+            ],
+        })
+        st.dataframe(
+            insured_df.style.format({"Baseline": "${:,.2f}", "Controlled": "${:,.2f}"}).hide(axis="index"),
+            use_container_width=True
+        )
+
+# Build one CSV covering Gross, Insurer Net, and Insured Net (Baseline & Controlled)
+def _metrics_rows(view_name: str, base_m: dict, ctrl_m: dict):
+    return [
+        {"View": view_name, "Scenario": "Baseline",  "Metric": "EAL",     "Value": base_m["EAL"]},
+        {"View": view_name, "Scenario": "Baseline",  "Metric": "VaR95",   "Value": base_m["VaR95"]},
+        {"View": view_name, "Scenario": "Baseline",  "Metric": "VaR99",   "Value": base_m["VaR99"]},
+        {"View": view_name, "Scenario": "Baseline",  "Metric": "CVaR95",  "Value": base_m["CVaR95"]},
+        {"View": view_name, "Scenario": "Baseline",  "Metric": "Max",     "Value": base_m["Max"]},
+        {"View": view_name, "Scenario": "Baseline",  "Metric": "P(Ruin)", "Value": base_m["P(Ruin)"]},
+        {"View": view_name, "Scenario": "Controlled","Metric": "EAL",     "Value": ctrl_m["EAL"]},
+        {"View": view_name, "Scenario": "Controlled","Metric": "VaR95",   "Value": ctrl_m["VaR95"]},
+        {"View": view_name, "Scenario": "Controlled","Metric": "VaR99",   "Value": ctrl_m["VaR99"]},
+        {"View": view_name, "Scenario": "Controlled","Metric": "CVaR95",  "Value": ctrl_m["CVaR95"]},
+        {"View": view_name, "Scenario": "Controlled","Metric": "Max",     "Value": ctrl_m["Max"]},
+        {"View": view_name, "Scenario": "Controlled","Metric": "P(Ruin)", "Value": ctrl_m["P(Ruin)"]},
+    ]
+
+gross_rows   = _metrics_rows("Gross",        base_metrics,        ctrl_metrics)
+ins_rows     = _metrics_rows("Insurer Net",  base_metrics_ins,    ctrl_metrics_ins)
+insured_rows = _metrics_rows("Insured Net",  base_metrics_insured,ctrl_metrics_insured)
+
+net_export_df = pd.DataFrame(gross_rows + ins_rows + insured_rows)
+# Pretty formatting for display if you want a quick peek:
+st.dataframe(
+    net_export_df.copy().assign(
+        Value_fmt=lambda d: np.where(d["Metric"]=="P(Ruin)", d["Value"].map(lambda x: f"{x:.4%}"),
+                                     d["Value"].map(lambda x: f"${x:,.2f}"))
+    )[["View","Scenario","Metric","Value_fmt"]],
+    use_container_width=True
+)
+
+net_csv = net_export_df.to_csv(index=False).encode("utf-8")
+st.download_button(
+    "📥 Download Gross/Insurer/Insured Metrics (CSV)",
+    net_csv,
+    file_name="net_metrics_all_views.csv",
+    mime="text/csv"
+)
 
 # Metric cards (baseline vs controlled and ROI)
 col1, col2, col3 = st.columns(3)
