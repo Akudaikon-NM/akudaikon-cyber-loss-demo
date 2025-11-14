@@ -359,6 +359,28 @@ class ControlCosts:
     media: float = 0.0
     error: float = 0.0
     external: float = 0.0
+@dataclass
+class PolicyTerms:
+    retention: float = 0.0    # deductible/self-insured retention per year
+    limit: float = 0.0        # annual aggregate limit (0 = unlimited)
+    coinsurance: float = 1.0  # insurer pays this fraction above retention (e.g., 0.9)
+
+def apply_policy_terms(annual_losses: np.ndarray, terms: PolicyTerms) -> np.ndarray:
+    """
+    Apply annual aggregate terms to each simulated year:
+    - First pay retention by insured
+    - Above retention, insurer pays coinsurance * min(excess, remaining limit)
+    - Return the insurer-paid loss series (net to insurer), and you can derive net-to-insured too.
+    """
+    L = annual_losses.astype(float).copy()
+    # Excess over retention
+    excess = np.clip(L - terms.retention, 0.0, None)
+    # Apply coinsurance
+    covered = excess * terms.coinsurance
+    # Apply annual limit
+    if terms.limit and terms.limit > 0:
+        covered = np.minimum(covered, terms.limit)
+    return covered
     
     def total(self) -> float:
         # Sum of all control costs
@@ -891,6 +913,11 @@ for k in ["server", "media", "error", "external"]:
     if v < 0:
         setattr(costs, k, 0.0)
         st.sidebar.warning(f"⚠️ {k.title()} cost < 0 corrected to 0.")
+with st.sidebar.expander("🏛️ Policy Layer (annual terms)", expanded=False):
+    retention = st.number_input("Retention / SIR ($)", 0.0, 1e9, 1_000_000.0, 100_000.0)
+    limit = st.number_input("Annual Aggregate Limit ($; 0 = unlimited)", 0.0, 1e10, 10_000_000.0, 1_000_000.0)
+    coins = st.slider("Coinsurance (insurer share above retention)", 0.0, 1.0, 0.9, 0.05)
+    terms = PolicyTerms(retention=retention, limit=limit, coinsurance=coins)
 
 # ======================
 # MAIN SIMULATION BLOCK
@@ -972,6 +999,15 @@ eal_b, eal_lo_b, eal_hi_b = eal_ci(base_losses, n_boot=n_boot)
 eal_c, eal_lo_c, eal_hi_c = eal_ci(ctrl_losses, n_boot=n_boot)
 st.caption(f"📊 EAL CI: Base ${eal_b:,.0f} [{eal_lo_b:,.0f}, {eal_hi_b:,.0f}] | "
            f"Ctrl ${eal_c:,.0f} [{eal_lo_c:,.0f}, {eal_hi_c:,.0f}]")
+# Insurer-net annual losses after applying terms
+base_net = apply_policy_terms(base_losses, terms)
+ctrl_net = apply_policy_terms(ctrl_losses, terms)
+
+# Insurer-centric metrics
+base_metrics_ins = compute_metrics(base_net, cfg.net_worth)   # net of terms
+ctrl_metrics_ins = compute_metrics(ctrl_net, cfg.net_worth)
+
+st.caption("📜 Policy Layer active: metrics below include annual retention/limit/coinsurance (insurer net).")
 
 # Metric cards (baseline vs controlled and ROI)
 col1, col2, col3 = st.columns(3)
@@ -1003,6 +1039,16 @@ summary_data = {
 summary_df = pd.DataFrame(summary_data)
 format_map = {"Baseline": "${:,.2f}", "Controlled": "${:,.2f}"}
 st.dataframe(summary_df.style.format(format_map, na_rep="—"), use_container_width=True)
+st.subheader("📑 Insurer Net Metrics (after terms)")
+ins_cols = st.columns(3)
+with ins_cols[0]:
+    st.metric("EAL (Net)", f"${base_metrics_ins['EAL']:,.0f} → ${ctrl_metrics_ins['EAL']:,.0f}",
+              delta=f"-${base_metrics_ins['EAL'] - ctrl_metrics_ins['EAL']:,.0f}")
+with ins_cols[1]:
+    st.metric("VaR95 (Net)", f"${base_metrics_ins['VaR95']:,.0f} → ${ctrl_metrics_ins['VaR95']:,.0f}",
+              delta=f"-${base_metrics_ins['VaR95'] - ctrl_metrics_ins['VaR95']:,.0f}")
+with ins_cols[2]:
+    st.metric("P(Ruin) (Net)", f"{base_metrics_ins['P(Ruin)']:.2%} → {ctrl_metrics_ins['P(Ruin)']:.2%}")
 
 # ============================
 # CONTROL ISOLATION (one-by-one)
@@ -1137,6 +1183,19 @@ with col1:
     st.plotly_chart(log_hist_figure(base_losses, "Baseline Loss Distribution"), use_container_width=True)
 with col2:
     st.plotly_chart(log_hist_figure(ctrl_losses, "Controlled Loss Distribution"), use_container_width=True)
+show_net_lec = st.checkbox("Overlay Policy-Layer (Net) on LEC", value=False)
+if show_net_lec:
+    lec_bn = cached_lec(base_net, lec_points).assign(scenario="Baseline (Net)")
+    lec_cn = cached_lec(ctrl_net, lec_points).assign(scenario="Controlled (Net)")
+    lec_combined = pd.concat([lec_combined, lec_bn, lec_cn])
+    fig_lec = px.line(lec_combined, x="Loss", y="Exceedance_Prob", color="scenario",
+                      title="Loss Exceedance Curve (Gross & Net)",
+                      labels={"Loss": "Loss Amount ($)", "Exceedance_Prob": "P(Loss ≥ x)"})
+    fig_lec.update_xaxes(type="log")
+    fig_lec.update_yaxes(type="log", range=[-2.5, 0])
+    fig_lec.add_hline(y=0.01, line_dash="dot", opacity=0.2)
+    fig_lec.add_hline(y=0.001, line_dash="dot", opacity=0.2)
+    st.plotly_chart(fig_lec, use_container_width=True)
 
 # ============================
 # PORTFOLIO BATCH ANALYSIS
@@ -1183,6 +1242,54 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
             csv = results_df.to_csv(index=False).encode("utf-8")
             st.download_button(label="📥 Download Results CSV", data=csv,
                                file_name="portfolio_results.csv", mime="text/csv")
+with st.expander("📁 Portfolio batch (CSV)", expanded=False):
+    ...
+    rho = st.slider("Correlation (common shock on frequency)", 0.0, 0.9, 0.0, 0.1,
+                    help="0 = independent; higher = more shared shock across accounts")
+if st.button("Run Portfolio Analysis"):
+    results = []
+    progress_bar = st.progress(0)
+    # Pre-draw common shock per simulation year (mean=1, lognormal or gamma)
+    rng = np.random.default_rng(cfg.seed)
+    common = rng.lognormal(mean=0.0, sigma=rho, size=cfg.trials) if rho > 0 else np.ones(cfg.trials)
+
+    for idx, row in df.iterrows():
+        ...
+        # Create a per-account simulate that multiplies λ by the common factor path
+        def simulate_with_common(cfg_account, fp_account, sp):
+            np.random.seed(cfg_account.seed)
+            annual = np.zeros(cfg_account.trials)
+            for t in range(cfg_account.trials):
+                lam_eff = fp_account.lam * common[t]
+                # Poisson draw using adjusted lam
+                n = np.random.poisson(lam_eff) if not fp_account.negbin else \
+                    np.random.poisson(np.random.gamma(shape=fp_account.r, scale=lam_eff/fp_account.r))
+                if n == 0:
+                    continue
+                for _ in range(n):
+                    if np.random.random() > fp_account.p_any:
+                        continue
+                    if sp.use_records:
+                        nrec = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
+                        if cfg_account.record_cap > 0:
+                            nrec = min(nrec, cfg_account.record_cap)
+                        loss = nrec * cfg_account.cost_per_record
+                    else:
+                        u = np.random.random()
+                        if u < sp.gpd_thresh_q:
+                            loss = np.exp(np.random.normal(sp.mu, sp.sigma))
+                        else:
+                            u_tail = np.random.random()
+                            xi, beta = sp.gpd_shape, sp.gpd_scale
+                            excess = (beta * (u_tail**(-xi) - 1.0) / xi) if xi != 0 else np.random.exponential(beta)
+                            thresh = float(lognorm(s=sp.sigma, scale=np.exp(sp.mu)).ppf(sp.gpd_thresh_q))
+                            loss = thresh + max(0.0, excess)
+                    annual[t] += loss
+            return annual
+
+        losses_account = simulate_with_common(cfg_account, fp_account, sp)
+        metrics_account = compute_metrics(losses_account, account_net_worth)
+        ...
 
 # ============================
 # SANITY CHECK GUIDE (expander)
