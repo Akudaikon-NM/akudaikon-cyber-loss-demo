@@ -847,7 +847,7 @@ fig_lec.add_hline(y=0.001, line_dash="dot", opacity=0.2)
 st.plotly_chart(fig_lec, use_container_width=True)
 
 # Download LEC data
-lec_export = lec_combined.rename(columns({"scenario": "Scenario"}))
+lec_export = lec_combined.rename(columns={"scenario": "Scenario"})
 lec_csv = lec_export.to_csv(index=False).encode("utf-8")
 st.download_button("📥 Download LEC Points (CSV)", lec_csv, "lec_points.csv", "text/csv")
 
