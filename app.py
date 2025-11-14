@@ -304,7 +304,6 @@ This is a **demonstration tool** for educational purposes:
 
 **Always**: Combine quantitative models with qualitative judgment, threat intelligence, and compliance requirements.
     """)
-
 # ===========================
 # DATA CLASSES (typed config)
 # ===========================
