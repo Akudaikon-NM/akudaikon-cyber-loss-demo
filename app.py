@@ -291,6 +291,45 @@ and patterns (Web Applications, Crimeware, etc.) for easier analysis.
 - Start with defaults, adjust incrementally
 - Export config  to share with team
 
+### 🏛️ Policy Layer (Insurance) — How it works
+
+The policy layer lets you see **insurer-net** losses after applying annual terms. It models **aggregate (per-year)** terms, not per-occurrence deductibles.
+
+**Inputs**
+- **Retention / SIR** – Amount the insured pays first each year.
+- **Annual Aggregate Limit** – Max the insurer will pay in a year (0 = unlimited).
+- **Coinsurance** – Insurer’s share of covered losses above the retention (e.g., 0.90).
+
+**Computation (per simulated year)**
+1. Let **L** be the gross annual loss.
+2. **Excess over retention:** `Excess = max(L − Retention, 0)`.
+3. **Apply coinsurance:** `Covered = Coinsurance × Excess`.
+4. **Apply annual limit:** `Insurer Net = min(Covered, Limit)` (if Limit = 0, no cap).
+5. **Insured Net** (not displayed by default) would be:
+   - If `L ≤ Retention`: insured pays **L**; insurer pays **0**.
+   - If `L > Retention`:
+     - Insurer pays `Insurer Net` (from step 4).
+     - Insured pays the rest: `L − Insurer Net`.
+
+The app reports **insurer-centric** metrics (EAL, VaR, P(Ruin)) on the **net** series and can optionally overlay the **Net LEC** on the chart.
+
+**Notes & Edge Cases**
+- This is an **annual aggregate** retention—not per-loss deductibles. Multiple incidents in a year accumulate against the same retention and limit.
+- If `Coinsurance = 1.0`, the insurer covers all excess (subject to Limit).
+- If `Limit = 0`, coverage is unlimited (subject to coinsurance).
+- If `Retention = 0`, coverage begins immediately at the first dollar of loss.
+- Very large tails can quickly exhaust the annual limit; check the Net LEC to see how often that happens.
+
+**Quick Example**
+- Retention = \$1,000,000; Limit = \$10,000,000; Coinsurance = 0.9  
+- Yearly loss **L = \$5,000,000**  
+  - Excess = \$4,000,000  
+  - Covered = 0.9 × 4,000,000 = **\$3,600,000**  
+  - Limit not hit → **Insurer Net = \$3.6M**, Insured pays \$1.4M  
+- Yearly loss **L = \$20,000,000**  
+  - Excess = \$19,000,000 → Covered = \$17,100,000 → Limit caps at **\$10,000,000**  
+  - **Insurer Net = \$10M**, Insured pays \$10M (retention + over-limit remainder)
+
 ---
 
 ## ⚠️ Limitations & Disclaimers
