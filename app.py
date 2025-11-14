@@ -788,16 +788,20 @@ with st.sidebar.expander("📁 Load parameter JSON", expanded=False):
     pj = st.file_uploader("Upload parameters.json", type=["json"], key="params_json")
     if pj:
         params = json.load(pj)
-        _a = params.get("DEFAULT_ACTION_SHARES") or params.get("defaults", {}).get("action_shares")
-        _p = params.get("DEFAULT_PATTERN_SHARES") or params.get("defaults", {}).get("pattern_shares")
-        if _a:
-            action_shares = _normalize_shares(_a)
-            st.session_state["_action_shares"] = action_shares
-            st.success("✓ Action shares loaded")
-        if _p:
-            pattern_shares = _normalize_shares(_p)
-            st.session_state["_pattern_shares"] = pattern_shares
-            st.success("✓ Pattern shares loaded")
+        cfg_block  = params.get("model")
+fp_block   = params.get("frequency")
+sp_block   = params.get("severity")
+ctrl_block = params.get("controls")
+costs_blk  = params.get("costs")
+
+if cfg_block:  st.session_state["_cfg_loaded"]   = cfg_block
+if fp_block:   st.session_state["_fp_loaded"]    = fp_block
+if sp_block:   st.session_state["_sp_loaded"]    = sp_block
+if ctrl_block: st.session_state["_ctrl_loaded"]  = ctrl_block
+if costs_blk:  st.session_state["_costs_loaded"] = costs_blk
+
+st.success("✓ Full scenario loaded"); st.rerun()
+
 
 # CIS mapping status
 with st.sidebar.expander("📚 CIS Mapping (VERIS → CIS)", expanded=False):
