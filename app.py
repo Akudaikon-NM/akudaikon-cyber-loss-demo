@@ -568,9 +568,9 @@ def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams,
             if sp.use_records:
                 # Records-based severity (lognormal records × $/record), with optional cap
                 n_records = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
-                if cfg.record_cap > 0:
-                    n_records = min(n_records, cfg.record_cap)
-                loss = n_records * sp.cost_per_record
+    if cfg.record_cap > 0:
+        n_records = min(n_records, cfg.record_cap)
+    loss = n_records * cfg.cost_per_record  # <- use cfg as the authority
             else:
                 # Monetary model: lognormal body + GPD tail on excess
                 u = np.random.random()
@@ -866,6 +866,8 @@ with st.sidebar.expander("💰 Severity Parameters", expanded=True):
 # Bootstrap controls (for CIs)
 with st.sidebar.expander("📐 Confidence Intervals (advanced)", expanded=False):
     n_boot = st.slider("Bootstrap reps for VaR/EAL CI", 100, 5000, 1000, 100)
+    if cfg.trials < 2000 and n_boot > 1000:
+        st.caption("⚠️ Consider reducing reps or increasing trials for stable CIs.")
 
 # Control selections
 with st.sidebar.expander("🛡️ Control Selection", expanded=True):
@@ -1194,21 +1196,25 @@ with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
 # EXPORT CURRENT CONFIG (JSON)
 # ============================
 st.sidebar.markdown("---")
-if st.sidebar.button("💾 Export Configuration"):
-    export_config = {
-        "schema_version": "1.0.0",
-        "timestamp": pd.Timestamp.utcnow().isoformat(),
-        "model": asdict(cfg),
-        "frequency": asdict(fp),
-        "severity": asdict(sp),
-        "controls": asdict(ctrl),
-        "costs": asdict(costs),
-        "action_shares": action_shares,
-        "pattern_shares": pattern_shares
-    }
-    st.sidebar.download_button(
-        label="Download config.json",
-        data=json.dumps(export_config, indent=2),
-        file_name="cyber_loss_config.json",
-        mime="application/json"
-    )
+export_config = {
+    "schema_version": "1.0.1",
+    "timestamp": pd.Timestamp.utcnow().isoformat(),
+    "model": asdict(cfg),
+    "frequency": asdict(fp),
+    "severity": asdict(sp),
+    "controls": asdict(ctrl),
+    "costs": asdict(costs),
+    "action_shares": action_shares,
+    "pattern_shares": pattern_shares
+}
+st.sidebar.download_button(
+    label="💾 Download config.json",
+    data=json.dumps(export_config, indent=2),
+    file_name="cyber_loss_config.json",
+    mime="application/json"
+)
+# Handy maintenance control
+if st.sidebar.button("🧹 Clear cached results"):
+    st.cache_data.clear()
+    st.experimental_rerun()
+
