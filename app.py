@@ -1324,10 +1324,6 @@ if show_net_lec:
     st.plotly_chart(fig_lec, use_container_width=True)
 
 # ============================
-# PORTFOLIO BATCH ANALYSIS
-# ============================
-
-# ============================
 # PORTFOLIO BATCH ANALYSIS (UNIFIED)
 # ============================
 with st.expander("📁 Portfolio batch (CSV)", expanded=False):
@@ -1427,7 +1423,6 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
             file_name="portfolio_results.csv",
             mime="text/csv"
         )
-
 # ============================
 # SANITY CHECK GUIDE (expander)
 # ============================
