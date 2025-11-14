@@ -227,18 +227,49 @@ Upload CSV with multiple accounts/business units:
 - **Extreme severity**: σ>3 or ξ>0.5 can produce unstable results
 
 ### Using CIS Recommendations
-- Upload `veris_to_cis_lookup.csv` (example structure below)
-- Maps your VERIS actions/patterns to CIS Controls v8
+- Upload `veris_to_cis_lookup.csv` to map VERIS threat patterns to CIS Controls v8
+- The app analyzes your action/pattern profile and recommends relevant controls
 - Use as starting point for control selection
 - Customize based on your environment
 
+**CSV Format:**
+The lookup CSV should have two columns:
+- `veris_field`: VERIS taxonomy path (e.g., `action.hacking.variety.Exploit vuln`)
+- `cis_control`: CIS Control number (e.g., `7.0` for Continuous Vulnerability Management)
+
 **Example CSV structure:**
 ```
-action,cis_id,cis_title
-hacking,13,Network Monitoring and Defense
-malware,10,Malware Defenses
-physical,14,Security Awareness Training
+veris_field,cis_control
+action.hacking.variety.Exploit vuln,7.0
+action.hacking.variety.Use of stolen creds,5.0
+action.malware.variety.Ransomware,11.0
+action.social.variety.Phishing,14.0
+action.hacking.vector.Web application,16.0
 ```
+
+**Supported VERIS fields:**
+- `action.[type].variety.[specific]` - Attack varieties (e.g., hacking, malware, social)
+- `action.[type].vector.[method]` - Attack vectors (e.g., web application, email)
+- `action.[type].result.[outcome]` - Attack results (e.g., exfiltrate)
+
+**CIS Controls included in this app:**
+- Control 2: Inventory and Control of Software Assets
+- Control 3: Data Protection
+- Control 4: Secure Configuration
+- Control 5: Account Management
+- Control 6: Access Control Management
+- Control 7: Continuous Vulnerability Management
+- Control 9: Email and Web Browser Protections
+- Control 10: Malware Defenses
+- Control 11: Data Recovery (Backups)
+- Control 12: Network Infrastructure Management
+- Control 13: Network Monitoring and Defense
+- Control 14: Security Awareness and Skills Training
+- Control 16: Application Software Security
+- Control 18: Penetration Testing
+
+The app automatically aggregates detailed VERIS fields to high-level actions (hacking, malware, social, etc.) 
+and patterns (Web Applications, Crimeware, etc.) for easier analysis.
 
 ---
 
