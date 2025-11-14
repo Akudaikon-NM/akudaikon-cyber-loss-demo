@@ -479,8 +479,12 @@ def _stable_seed_from(s: str, base: int = 0):
 # =============================
 def load_cis_mapping():
     """
-    Loads CSV mapping VERIS action/pattern to CIS controls.
-    Tries two locations; returns dict with 'loaded' flag and maps.
+    Load CSV mapping VERIS action/pattern to CIS controls.
+
+    Expected columns (case-insensitive):
+      - VERIS path: one of ["veris_field", "veris", "veris_key", "action", "pattern"]
+      - CIS id: one of ["cis", "cis_control", "cis_id", "cis_v8_id"]
+      - CIS title (optional): one of ["cis_title", "cis_name", "title", "name"]
     """
     paths = ["data/veris_to_cis_lookup.csv", "veris_to_cis_lookup.csv"]
     for p in paths:
@@ -488,49 +492,92 @@ def load_cis_mapping():
             try:
                 df = pd.read_csv(p)
                 cols = {c.lower(): c for c in df.columns}
-                
-                # Identify potential column names (case-insensitive)
-                veris_cols = [c for c in ["action", "pattern", "veris", "veris_key"] if c in cols]
-                cis_id_col = next((cols[c] for c in ["cis", "cis_control", "cis_id", "cis_v8_id"] if c in cols), None)
-                cis_title_col = next((cols[c] for c in ["cis_title", "cis_name", "title", "name"] if c in cols), None)
+
+                # --- find VERIS column ---
+                veris_col = None
+                for cand in ["veris_field", "veris", "veris_key", "action", "pattern"]:
+                    if cand in cols:
+                        veris_col = cols[cand]
+                        break
+                if veris_col is None:
+                    st.sidebar.warning(
+                        f"CIS CSV {p} is missing a VERIS column "
+                        "(expected one of: veris_field, veris, veris_key, action, pattern)."
+                    )
+                    continue
+
+                # --- CIS id / title columns ---
+                cis_id_col = next(
+                    (cols[c] for c in ["cis", "cis_control", "cis_id", "cis_v8_id"] if c in cols),
+                    None,
+                )
+                cis_title_col = next(
+                    (cols[c] for c in ["cis_title", "cis_name", "title", "name"] if c in cols),
+                    None,
+                )
 
                 amap, pmap = {}, {}
+
+                # Helper: map a raw VERIS string to a canonical action/pattern key
+                def canonical_key(raw: str):
+                    raw_l = raw.lower()
+
+                    # Actions
+                    for k in DEFAULT_ACTION_SHARES.keys():
+                        if k.lower() in raw_l:
+                            return ("action", k)   # e.g. ("action", "hacking")
+
+                    # Patterns
+                    for k in DEFAULT_PATTERN_SHARES.keys():
+                        if k.lower() in raw_l:
+                            return ("pattern", k)  # e.g. ("pattern", "Web Applications")
+
+                    return (None, raw)  # unknown / fallback
+
                 for _, row in df.iterrows():
-                    # Select first non-null VERIS-like field
-                    veris_val = None
-                    for vc in veris_cols:
-                        v = str(row.get(cols[vc])).strip() if pd.notna(row.get(cols[vc])) else None
-                        if v:
-                            veris_val = v
-                            break
+                    val = row.get(veris_col)
+                    if pd.isna(val):
+                        continue
+                    veris_val = str(val).strip()
                     if not veris_val:
                         continue
 
-                    # Compose readable CIS label
-                    cis_id = str(row.get(cis_id_col)).strip() if cis_id_col and pd.notna(row.get(cis_id_col)) else ""
-                    cis_title = str(row.get(cis_title_col)).strip() if cis_title_col and pd.notna(row.get(cis_title_col)) else ""
-                    cis_display = (f"{cis_id} – {cis_title}".strip(" –")) if cis_id or cis_title else ""
+                    cis_id = (
+                        str(row.get(cis_id_col)).strip()
+                        if cis_id_col and pd.notna(row.get(cis_id_col))
+                        else ""
+                    )
+                    cis_title = (
+                        str(row.get(cis_title_col)).strip()
+                        if cis_title_col and pd.notna(row.get(cis_title_col))
+                        else ""
+                    )
+                    cis_display = (f"{cis_id} – {cis_title}".strip(" –")) if (cis_id or cis_title) else ""
 
-                    # Heuristically bucket into action vs pattern maps
-                    key_lower = veris_val.lower()
-                    if key_lower in [k.lower() for k in DEFAULT_ACTION_SHARES.keys()]:
-                        amap.setdefault(veris_val, set()).add(cis_display or cis_id)
-                    elif key_lower in [k.lower() for k in DEFAULT_PATTERN_SHARES.keys()]:
-                        pmap.setdefault(veris_val, set()).add(cis_display or cis_id)
+                    kind, key = canonical_key(veris_val)
+
+                    if kind == "action":
+                        amap.setdefault(key, set()).add(cis_display or cis_id)
+                    elif kind == "pattern":
+                        pmap.setdefault(key, set()).add(cis_display or cis_id)
                     else:
-                        # Unknown key: include in both so it still surfaces
-                        amap.setdefault(veris_val, set()).add(cis_display or cis_id)
-                        pmap.setdefault(veris_val, set()).add(cis_display or cis_id)
+                        # Unknown VERIS mapping: include in both maps under its raw name
+                        amap.setdefault(key, set()).add(cis_display or cis_id)
+                        pmap.setdefault(key, set()).add(cis_display or cis_id)
 
                 # Convert sets → sorted lists
                 amap = {k: sorted([x for x in v if x]) for k, v in amap.items()}
                 pmap = {k: sorted([x for x in v if x]) for k, v in pmap.items()}
+
                 return {"loaded": True, "action": amap, "pattern": pmap, "path": p}
+
             except Exception as e:
-                st.sidebar.warning(f"Failed to read CIS mapping CSV: {e}")
+                st.sidebar.warning(f"Failed to read CIS mapping CSV ({p}): {e}")
                 break
+
     # Fallback if not found or error
     return {"loaded": False, "action": {}, "pattern": {}, "path": None}
+
 
 def cis_for_profile(action_shares, pattern_shares, cis_map, action_thresh=0.10, pattern_thresh=0.10, top_n=15):
     """Return list of CIS controls triggered by the current mix at cutoffs."""
