@@ -647,7 +647,7 @@ else:
 
         annual_losses[i] += loss
 
-    return annual_losses
+return annual_losses
 
 def compute_metrics(losses: np.ndarray, net_worth: float) -> dict:
     """Compute EAL, VaR95/99, CVaR95, Max, and P(Ruin) from simulated losses."""
