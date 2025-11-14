@@ -623,27 +623,28 @@ def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams,
             if np.random.random() > p_any_eff:
                 continue
 
-            if sp.use_records:
-                # Records-based severity (lognormal records × $/record), with optional cap
-                n_records = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
-                if cfg.record_cap > 0:
-                    n_records = min(n_records, cfg.record_cap)
-                loss = n_records * cfg.cost_per_record
+            # inside simulate_annual_losses(...) where you draw each incident’s severity
+if sp.use_records:
+    # Records-based severity (lognormal records × $/record), with optional cap
+    n_records = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
+    if cfg.record_cap > 0:
+        n_records = min(n_records, cfg.record_cap)
+    loss = n_records * cfg.cost_per_record  # use cfg as the authority
+else:
+    # Monetary model: lognormal body + GPD tail on excess
+    u = np.random.random()
+    if u < sp.gpd_thresh_q:
+        loss = np.exp(np.random.normal(sp.mu, sp.sigma))
+    else:
+        u_tail = np.random.random()
+        xi = sp.gpd_shape
+        beta = gpd_scale_eff
+        if xi == 0.0:
+            excess = np.random.exponential(beta)
+        else:
+            excess = beta * (u_tail**(-xi) - 1.0) / xi
+        loss = body_thresh_val + max(0.0, excess)
 
-            else:
-                # Monetary model: lognormal body + GPD tail on excess
-                u = np.random.random()
-                if u < sp.gpd_thresh_q:
-                    loss = np.exp(np.random.normal(sp.mu, sp.sigma))
-                else:
-                    u_tail = np.random.random()
-                    xi = sp.gpd_shape
-                    beta = gpd_scale_eff
-                    if xi == 0.0:
-                        excess = np.random.exponential(beta)
-                    else:
-                        excess = beta * (u_tail**(-xi) - 1.0) / xi
-                    loss = body_thresh_val + max(0.0, excess)
 
             annual_losses[i] += loss
 
