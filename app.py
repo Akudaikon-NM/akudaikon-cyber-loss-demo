@@ -182,7 +182,7 @@ Upload CSV with multiple accounts/business units:
    - Do tail risks (VaR99, P(Ruin)) align with expectations?
    
 3. **Load VERIS action/pattern shares** (optional):
-   - Upload JSON with your threat profile
+   - Upload  with your threat profile
    - Or use defaults (VCDB-informed)
    
 4. **Select controls** and set costs:
@@ -200,7 +200,7 @@ Upload CSV with multiple accounts/business units:
    - Adjust parameters if needed
    
 7. **Export configuration**:
-   - Save JSON for reproducibility
+   - Save  for reproducibility
    - Share with stakeholders
    - Use for periodic updates
 
@@ -289,7 +289,7 @@ and patterns (Web Applications, Crimeware, etc.) for easier analysis.
 - Check parameter warnings (yellow/red alerts)
 - Review sanity check guide (bottom of page)
 - Start with defaults, adjust incrementally
-- Export config JSON to share with team
+- Export config  to share with team
 
 ---
 
@@ -747,7 +747,7 @@ st.sidebar.header("⚙️ Model Parameters")
 
 # Load parameter JSON (optional) — can override action/pattern shares
 with st.sidebar.expander("📁 Load parameter JSON", expanded=False):
-    pj = st.file_uploader("Upload parameters.json", type=["json"])
+    pj = st.file_uploader("Upload parameters.json", type=["json"], key="params_json")
     if pj:
         params = json.load(pj)
         _a = params.get("DEFAULT_ACTION_SHARES") or params.get("defaults", {}).get("action_shares")
@@ -1199,11 +1199,21 @@ if show_net_lec:
 # ============================
 with st.expander("📁 Portfolio batch (CSV)", expanded=False):
     st.markdown("Upload a CSV with columns: `account_id`, `net_worth`, `lam`, `p_any`, etc.")
-    up = st.file_uploader("Accounts CSV", type=["csv"])
+    up  = st.file_uploader("Accounts CSV", type=["csv"], key="portfolio_accounts_csv")
+    rho = st.slider(
+        "Correlation (common shock on frequency)",
+        0.0, 0.9, 0.0, 0.1,
+        key="rho_common_shock",
+        help="0 = independent; higher = more shared shock across accounts"
+    )
+
     if up:
         df = pd.read_csv(up)
         st.write(f"Loaded {len(df)} accounts")
-        if st.button("Run Portfolio Analysis"):
+
+        if st.button("Run Portfolio Analysis", key="run_portfolio_btn"):
+            ...
+
             results = []
             progress_bar = st.progress(0)
             for idx, row in df.iterrows():
