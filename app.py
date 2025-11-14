@@ -645,7 +645,6 @@ else:
             excess = beta * (u_tail**(-xi) - 1.0) / xi
         loss = body_thresh_val + max(0.0, excess)
 
-
             annual_losses[i] += loss
 
     return annual_losses
@@ -1328,102 +1327,106 @@ if show_net_lec:
 # PORTFOLIO BATCH ANALYSIS
 # ============================
 
+# ============================
+# PORTFOLIO BATCH ANALYSIS (UNIFIED)
+# ============================
 with st.expander("📁 Portfolio batch (CSV)", expanded=False):
     st.markdown("Upload a CSV with columns: `account_id`, `net_worth`, `lam`, `p_any`, etc.")
-    up = st.file_uploader("Accounts CSV", type=["csv"])
-    rho = st.slider(
-        "Correlation (common shock on frequency)",
-        0.0, 0.9, 0.0, 0.1,
-        help="0 = independent; higher = more shared shock across accounts"
-    )
+    up = st.file_uploader("Accounts CSV", type=["csv"], key="accounts_csv")  # <-- unique key
+    rho = st.slider("Correlation (common shock on frequency)", 0.0, 0.9, 0.0, 0.1,
+                    help="0 = independent; higher = more shared shock across accounts",
+                    key="portfolio_rho")
 
-    if up:
+    if up is not None and st.button("Run Portfolio Analysis", key="run_portfolio"):
         df = pd.read_csv(up)
         st.write(f"Loaded {len(df)} accounts")
 
-        if st.button("Run Portfolio Analysis"):
-            results = []
-            progress_bar = st.progress(0)
+        results = []
+        progress_bar = st.progress(0)
 
-            # Shared common-shock path for frequency
-            rng = np.random.default_rng(cfg.seed)
-            common = rng.lognormal(mean=0.0, sigma=rho, size=cfg.trials) if rho > 0 else np.ones(cfg.trials)
+        # Pre-draw common factor across simulation years (if rho>0)
+        rng = np.random.default_rng(cfg.seed)
+        common = (rng.lognormal(mean=0.0, sigma=rho, size=cfg.trials) if rho > 0
+                  else np.ones(cfg.trials))
 
-            for idx, row in df.iterrows():
-                account_id = row.get('account_id', f'Account_{idx}')
-                account_net_worth = float(pd.to_numeric(row.get('net_worth', 100e6), errors='coerce') or 100e6)
-                account_lam = float(pd.to_numeric(row.get('lam', 2.0), errors='coerce') or 2.0)
-                account_p_any = float(pd.to_numeric(row.get('p_any', 0.7), errors='coerce') or 0.7)
-                account_p_any = float(np.clip(account_p_any, 0.0, 1.0))
+        def simulate_with_common(cfg_account: ModelConfig, fp_account: FreqParams, sp: SevParams):
+            """Poisson/Gamma–Poisson frequency with multiplicative common factor."""
+            np.random.seed(cfg_account.seed)
+            annual = np.zeros(cfg_account.trials)
+            for t in range(cfg_account.trials):
+                lam_t = fp_account.lam * common[t]
+                if fp_account.negbin:
+                    L = np.random.gamma(shape=fp_account.r, scale=lam_t / fp_account.r)
+                    n = np.random.poisson(L)
+                else:
+                    n = np.random.poisson(lam_t)
 
-                cfg_account = ModelConfig(
-                    trials=cfg.trials,
-                    net_worth=account_net_worth,
-                    seed=_stable_seed_from(account_id, base=cfg.seed),
-                    record_cap=cfg.record_cap,
-                    cost_per_record=cfg.cost_per_record
-                )
-                fp_account = FreqParams(
-                    lam=account_lam,
-                    p_any=account_p_any,
-                    negbin=fp.negbin,
-                    r=fp.r
-                )
+                if n == 0:
+                    continue
+                for _ in range(n):
+                    if np.random.random() > fp_account.p_any:
+                        continue
+                    if sp.use_records:
+                        nrec = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
+                        if cfg_account.record_cap > 0:
+                            nrec = min(nrec, cfg_account.record_cap)
+                        loss = nrec * cfg_account.cost_per_record
+                    else:
+                        u = np.random.random()
+                        if u < sp.gpd_thresh_q:
+                            loss = np.exp(np.random.normal(sp.mu, sp.sigma))
+                        else:
+                            u_tail = np.random.random()
+                            xi, beta = sp.gpd_shape, sp.gpd_scale
+                            excess = (beta * (u_tail**(-xi) - 1.0) / xi) if xi != 0 else np.random.exponential(beta)
+                            thresh = float(lognorm(s=sp.sigma, scale=np.exp(sp.mu)).ppf(sp.gpd_thresh_q))
+                            loss = thresh + max(0.0, excess)
+                    annual[t] += loss
+            return annual
 
-                # Simulate with common shock on λ
-                def simulate_with_common(cfg_account, fp_account, sp):
-                    np.random.seed(cfg_account.seed)
-                    annual = np.zeros(cfg_account.trials)
-                    for t in range(cfg_account.trials):
-                        lam_t = fp_account.lam * common[t]
-                        n = (np.random.poisson(lam_t) if not fp_account.negbin else
-                             np.random.poisson(np.random.gamma(shape=fp_account.r, scale=lam_t / fp_account.r)))
-                        if n == 0:
-                            continue
-                        for _ in range(n):
-                            if np.random.random() > fp_account.p_any:
-                                continue
-                            if sp.use_records:
-                                nrec = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
-                                if cfg_account.record_cap > 0:
-                                    nrec = min(nrec, cfg_account.record_cap)
-                                loss = nrec * cfg_account.cost_per_record
-                            else:
-                                u = np.random.random()
-                                if u < sp.gpd_thresh_q:
-                                    loss = np.exp(np.random.normal(sp.mu, sp.sigma))
-                                else:
-                                    u_tail = np.random.random()
-                                    xi, beta = sp.gpd_shape, sp.gpd_scale
-                                    if xi == 0:
-                                        excess = np.random.exponential(beta)
-                                    else:
-                                        excess = beta * (u_tail**(-xi) - 1.0) / xi
-                                    thresh = float(lognorm(s=sp.sigma, scale=np.exp(sp.mu)).ppf(sp.gpd_thresh_q))
-                                    loss = thresh + max(0.0, excess)
-                            annual[t] += loss
-                    return annual
+        for idx, row in df.iterrows():
+            account_id = row.get('account_id', f'Account_{idx}')
+            account_net_worth = pd.to_numeric(row.get('net_worth', 100e6), errors='coerce')
+            account_lam = pd.to_numeric(row.get('lam', 2.0), errors='coerce')
+            account_p_any = pd.to_numeric(row.get('p_any', 0.7), errors='coerce')
 
-                losses_account = simulate_with_common(cfg_account, fp_account, sp)
-                metrics_account = compute_metrics(losses_account, account_net_worth)
-                results.append({
-                    'account_id': account_id,
-                    'EAL': metrics_account['EAL'],
-                    'VaR95': metrics_account['VaR95'],
-                    'VaR99': metrics_account['VaR99'],
-                    'P(Ruin)': metrics_account['P(Ruin)']
-                })
-                progress_bar.progress((idx + 1) / len(df))
+            account_net_worth = float(account_net_worth if np.isfinite(account_net_worth) else 100e6)
+            account_lam = float(account_lam if np.isfinite(account_lam) else 2.0)
+            account_p_any = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
 
-            results_df = pd.DataFrame(results)
-            st.success("✓ Portfolio analysis complete!")
-            st.dataframe(results_df, use_container_width=True)
-            st.download_button(
-                label="📥 Download Results CSV",
-                data=results_df.to_csv(index=False).encode("utf-8"),
-                file_name="portfolio_results.csv",
-                mime="text/csv"
+            cfg_account = ModelConfig(
+                trials=cfg.trials,
+                net_worth=account_net_worth,
+                seed=_stable_seed_from(account_id, base=cfg.seed),
+                record_cap=cfg.record_cap,
+                cost_per_record=cfg.cost_per_record
             )
+            fp_account = FreqParams(lam=account_lam, p_any=account_p_any, negbin=fp.negbin, r=fp.r)
+
+            if rho > 0:
+                losses_account = simulate_with_common(cfg_account, fp_account, sp)
+            else:
+                losses_account = cached_simulate(_to_dict(cfg_account), _to_dict(fp_account), _to_dict(sp))
+
+            metrics_account = compute_metrics(losses_account, account_net_worth)
+            results.append({
+                'account_id': account_id,
+                'EAL': metrics_account['EAL'],
+                'VaR95': metrics_account['VaR95'],
+                'VaR99': metrics_account['VaR99'],
+                'P(Ruin)': metrics_account['P(Ruin)']
+            })
+            progress_bar.progress((idx + 1) / max(1, len(df)))
+
+        results_df = pd.DataFrame(results)
+        st.success("✓ Portfolio analysis complete!")
+        st.dataframe(results_df, use_container_width=True)
+        st.download_button(
+            label="📥 Download Results CSV",
+            data=results_df.to_csv(index=False).encode("utf-8"),
+            file_name="portfolio_results.csv",
+            mime="text/csv"
+        )
 
 
 # ============================
