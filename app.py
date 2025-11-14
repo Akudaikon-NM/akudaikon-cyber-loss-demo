@@ -784,23 +784,39 @@ def log_hist_figure(losses, title):
 st.sidebar.header("⚙️ Model Parameters")
 
 # Load parameter JSON (optional) — can override action/pattern shares
-with st.sidebar.expander("📁 Load parameter JSON", expanded=False):
-    pj = st.file_uploader("Upload parameters.json", type=["json"], key="params_json")
-    if pj:
-        params = json.load(pj)
-        cfg_block  = params.get("model")
-fp_block   = params.get("frequency")
-sp_block   = params.get("severity")
-ctrl_block = params.get("controls")
-costs_blk  = params.get("costs")
+# --- Load/Save scenarios ---
+with st.sidebar.expander("📁 Load / Save scenario", expanded=False):
+    pj = st.file_uploader("Upload a saved scenario (config.json)", type=["json"], key="params_json")
 
-if cfg_block:  st.session_state["_cfg_loaded"]   = cfg_block
-if fp_block:   st.session_state["_fp_loaded"]    = fp_block
-if sp_block:   st.session_state["_sp_loaded"]    = sp_block
-if ctrl_block: st.session_state["_ctrl_loaded"]  = ctrl_block
-if costs_blk:  st.session_state["_costs_loaded"] = costs_blk
+    if pj is not None:
+        try:
+            # Read bytes → dict (json.load on BytesIO sometimes trips in Streamlit)
+            raw = pj.read()
+            params = json.loads(raw.decode("utf-8"))
 
-st.success("✓ Full scenario loaded"); st.rerun()
+            # Optional blocks; only set if present
+            blocks = {
+                "_cfg_loaded":   params.get("model"),
+                "_fp_loaded":    params.get("frequency"),
+                "_sp_loaded":    params.get("severity"),
+                "_ctrl_loaded":  params.get("controls"),
+                "_costs_loaded": params.get("costs"),
+                "_action_shares_loaded":  params.get("action_shares"),
+                "_pattern_shares_loaded": params.get("pattern_shares"),
+                "_policy_loaded": params.get("policy_terms"),  # if you add this later
+            }
+            for k, v in blocks.items():
+                if v is not None:
+                    st.session_state[k] = v
+
+            st.success("✓ Scenario loaded. Rebuilding UI…")
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"Failed to load scenario: {e}")
+
+    st.caption("Tip: Use the **Download config.json** button below to save the current scenario.")
+
 
 
 # CIS mapping status
