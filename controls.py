@@ -84,14 +84,21 @@ def annualized_cost(c: Union[float, CostTCO]) -> float:
 
 @dataclass(frozen=True)
 class ControlCosts:
-    """
-    Annualized costs for each control family.
-    You may pass either a plain annual number (float) or a CostTCO.
-    """
     server:   Union[float, CostTCO] = 0.0
     media:    Union[float, CostTCO] = 0.0
     error:    Union[float, CostTCO] = 0.0
     external: Union[float, CostTCO] = 0.0
+
+    # Optional: apply control flags if passed; else sum all annualized
+    def total(self, ctrl: ControlSet | None = None) -> float:
+        if ctrl is None:
+            return sum(annualized_cost(v) for v in (self.server, self.media, self.error, self.external))
+        total = 0.0
+        if ctrl.server:   total += annualized_cost(self.server)
+        if ctrl.media:    total += annualized_cost(self.media)
+        if ctrl.error:    total += annualized_cost(self.error)
+        if ctrl.external: total += annualized_cost(self.external)
+        return total
 
 # ---------------------------
 # Tunable effect constants
@@ -171,3 +178,35 @@ def total_cost(ctrl: ControlSet, costs: ControlCosts) -> float:
     if ctrl.external:
         total += annualized_cost(costs.external)
     return total
+def effects_from_shares_improved(ctrl: ControlSet, action_shares: Dict[str, float], pattern_shares: Dict[str, float]) -> ControlEffects:
+    def _norm(d):
+        s = sum(d.values()) or 1.0
+        return {k: v/s for k, v in d.items()}
+    a = _norm(action_shares)
+    p = _norm(pattern_shares)
+
+    lam_mult = p_any_mult = gpd_mult = 1.0
+    hack = a.get("hacking",0)+p.get("Web Applications",0)+p.get("Crimeware",0)
+    misuse = a.get("misuse",0)+p.get("Privilege Misuse",0)
+    err = a.get("error",0)+p.get("Miscellaneous Errors",0)
+    phys = a.get("physical",0)+p.get("Lost and Stolen Assets",0)
+
+    if ctrl.server:
+        lam_mult *= (1 - 0.35*hack)
+        p_any_mult *= (1 - 0.20*hack)
+        gpd_mult *= (1 - 0.15*hack)
+    if ctrl.media:
+        lam_mult *= (1 - 0.25*phys)
+        p_any_mult *= (1 - 0.25*phys)
+    if ctrl.error:
+        lam_mult *= (1 - 0.20*err)
+        p_any_mult *= (1 - 0.25*err)
+    if ctrl.external:
+        lam_mult *= (1 - 0.30*(hack+misuse))
+        gpd_mult *= (1 - 0.20*(hack+misuse))
+
+    import numpy as np
+    lam_mult = float(np.clip(lam_mult, 0.2, 1.0))
+    p_any_mult = float(np.clip(p_any_mult, 0.2, 1.0))
+    gpd_mult = float(np.clip(gpd_mult, 0.2, 1.0))
+    return ControlEffects(lam_mult, p_any_mult, gpd_mult)
