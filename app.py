@@ -570,7 +570,7 @@ def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams,
                 n_records = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
     if cfg.record_cap > 0:
         n_records = min(n_records, cfg.record_cap)
-    loss = n_records * cfg.cost_per_record  # <- use cfg as the authority
+loss = n_records * cfg.cost_per_record  # <- use cfg as the authority
             else:
                 # Monetary model: lognormal body + GPD tail on excess
                 u = np.random.random()
