@@ -557,49 +557,46 @@ def rank_cis_controls(cis_map, action_shares, pattern_shares, top_n=10):
 def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams, 
                            ce: Optional[ControlEffects] = None) -> np.ndarray:
     """Simulate annual loss totals under frequency+severity, optionally with controls."""
-    np.random.seed(cfg.seed)  # reproducibility across UI refreshes
+    np.random.seed(cfg.seed)  # reproducibility
     
     # Apply control multipliers (or pass-through 1.0 if no controls)
     lam_eff = fp.lam * (ce.lam_mult if ce else 1.0)
     p_any_eff = fp.p_any * (ce.p_any_mult if ce else 1.0)
     gpd_scale_eff = sp.gpd_scale * (ce.gpd_scale_mult if ce else 1.0)
     
-    # For the monetary model, precompute the body threshold at the chosen quantile
+    # Precompute body threshold for monetary model
     if not sp.use_records:
         body_thresh_val = float(lognorm(s=sp.sigma, scale=np.exp(sp.mu)).ppf(sp.gpd_thresh_q))
     
-    # Preallocate one total per simulated year
     annual_losses = np.zeros(cfg.trials)
     
     for i in range(cfg.trials):
-        # Draw frequency (Poisson or NegBin via Gamma–Poisson)
+        # Frequency
         if fp.negbin:
             L = np.random.gamma(shape=fp.r, scale=lam_eff / fp.r)
             n_incidents = np.random.poisson(L)
         else:
             n_incidents = np.random.poisson(lam_eff)
-        
         if n_incidents == 0:
             continue
-        
-        # For each incident, decide if it produces a dollar loss; then draw severity
+
+        # Severity per incident
         for _ in range(n_incidents):
             if np.random.random() > p_any_eff:
                 continue
-            
+
             if sp.use_records:
                 # Records-based severity (lognormal records × $/record), with optional cap
                 n_records = np.exp(np.random.normal(sp.records_mu, sp.records_sigma))
-    if cfg.record_cap > 0:
-        n_records = min(n_records, cfg.record_cap)
-        loss = n_records * cfg.cost_per_record  # <- use cfg as the authority
+                if cfg.record_cap > 0:
+                    n_records = min(n_records, cfg.record_cap)
+                loss = n_records * cfg.cost_per_record
             else:
                 # Monetary model: lognormal body + GPD tail on excess
                 u = np.random.random()
                 if u < sp.gpd_thresh_q:
                     loss = np.exp(np.random.normal(sp.mu, sp.sigma))
                 else:
-                    # Tail: inverse-CDF sampling for GPD excess
                     u_tail = np.random.random()
                     xi = sp.gpd_shape
                     beta = gpd_scale_eff
@@ -608,11 +605,11 @@ def simulate_annual_losses(cfg: ModelConfig, fp: FreqParams, sp: SevParams,
                     else:
                         excess = beta * (u_tail**(-xi) - 1.0) / xi
                     loss = body_thresh_val + max(0.0, excess)
-            
-            # Add incident loss to this year’s total
+
             annual_losses[i] += loss
-    
+
     return annual_losses
+
 
 def compute_metrics(losses: np.ndarray, net_worth: float) -> dict:
     """Compute EAL, VaR95/99, CVaR95, Max, and P(Ruin) from simulated losses."""
