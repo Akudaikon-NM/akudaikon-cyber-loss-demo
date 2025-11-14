@@ -195,7 +195,7 @@ Upload CSV with multiple accounts/business units:
    - Review marginal ROI for next investment
    
 6. **Validate results**:
-   - Use sanity check guide (at bottom)
+   - Use  (at bottom)
    - Export LEC points and review tail behavior
    - Adjust parameters if needed
    
@@ -1431,8 +1431,14 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
 # ============================
 with st.expander("🧪 Sanity check guide (what to expect)", expanded=False):
     st.markdown("""
-... (unchanged guidance text)
-""")
+- **Frequency sanity:** If λ≈2 and p(any)≈0.7, expect ~1–2 paid-loss incidents per year.
+- **Scale sanity:** With lognormal μ=12, σ=2, median single-incident loss ≈ \$160k; tails rise fast.
+- **Tail sanity:** Increasing GPD shape ξ or scale β should push **LEC** right and lift **VaR99**.
+- **Controls sanity:** Turning on controls should lower EAL/VaR; ΔEAL should be in the same ballpark as your multipliers suggest.
+- **Policy layer sanity:** Higher retention reduces **Insurer Net EAL** but raises **Insured Net EAL**; a tight annual limit clips the **Insurer Net Max**.
+- **Bootstrap sanity:** Wider CIs when trials are low or σ/ξ are high; narrow when trials increase.
+If any of these don’t hold, re-check parameters for extreme values or typos.
+    """)
 
 # ============================
 # EXPORT CURRENT CONFIG (JSON)
