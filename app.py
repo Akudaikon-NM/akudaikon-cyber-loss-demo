@@ -645,7 +645,7 @@ else:
             excess = beta * (u_tail**(-xi) - 1.0) / xi
         loss = body_thresh_val + max(0.0, excess)
 
-            annual_losses[i] += loss
+        annual_losses[i] += loss
 
     return annual_losses
 
