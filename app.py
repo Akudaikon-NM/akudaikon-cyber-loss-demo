@@ -20,10 +20,258 @@ st.caption("Monte Carlo loss model with control ROI, diagnostics, and optional B
 # HELP / HOW-TO (collapsible)
 # ===========================
 with st.expander("❓ Help & How to Use This App", expanded=False):
-    # Multiline Markdown explaining app usage and key concepts
     st.markdown("""
-### What this app does
-... (omitted for brevity — unchanged help text)
+## Overview
+This app is a **Monte Carlo cyber-loss simulator** that helps you:
+- Model annual cyber-loss distributions using frequency and severity parameters
+- Evaluate control effectiveness and ROI
+- Understand loss exceedance probabilities and tail risk
+- Make data-driven cybersecurity investment decisions
+
+---
+
+## 📊 Core Concepts
+
+### Frequency-Severity Framework
+The app models losses using a **compound distribution**:
+1. **Frequency**: How many incidents occur per year (Poisson or Negative Binomial)
+2. **Severity**: How much each incident costs (Lognormal + GPD tail, or records-based)
+3. **Annual Loss**: Sum of all incident losses in a simulated year
+
+### Key Metrics
+- **EAL (Expected Annual Loss)**: Average loss per year across all simulations
+- **VaR (Value at Risk)**: Loss threshold at a percentile (e.g., VaR95 = 95th percentile loss)
+- **CVaR (Conditional VaR)**: Average loss when losses exceed VaR threshold
+- **P(Ruin)**: Probability that annual loss exceeds your net worth
+- **ROSI (Return on Security Investment)**: `(Risk Reduction - Control Cost) / Control Cost × 100%`
+
+---
+
+## ⚙️ Input Parameters
+
+### 🎲 Simulation Config
+- **Monte Carlo Trials**: Number of simulated years (more = smoother distributions, 10,000 recommended)
+- **Net Worth**: Total assets at risk; used to calculate P(Ruin)
+- **Random Seed**: Set for reproducible results across runs
+- **Cost per Record**: Dollar amount per exposed/lost record (used in records-based mode)
+- **Record Cap**: Maximum records per incident (0 = unlimited)
+
+### 📊 Frequency Parameters
+Controls how often incidents occur:
+- **λ (lambda)**: Mean incidents per year
+  - Example: λ=2.0 means ~2 incidents/year on average
+  - Typical range: 0.5–5.0 for most organizations
+- **P(any loss | incident)**: Probability an incident produces a dollar loss
+  - Not all incidents result in quantifiable losses
+  - Typical range: 0.5–0.9
+- **Distribution Type**:
+  - **Poisson**: Standard, assumes independent events
+  - **Negative Binomial**: Allows over-dispersion (clustering of incidents)
+- **NegBin Dispersion (r)**: Lower r = fatter tails, more variance
+  - r=1.0 is moderate over-dispersion
+  - r<0.5 is high over-dispersion (use cautiously)
+
+### 💰 Severity Parameters (Two Modes)
+
+#### **Mode 1: Monetary Model** (default)
+Models loss amounts directly in dollars using:
+- **Lognormal Body**:
+  - **μ (mu)**: Mean of log-losses (controls median loss)
+    - μ=12 → median loss ≈ $163k
+    - μ=14 → median loss ≈ $1.2M
+  - **σ (sigma)**: Standard deviation of log-losses (controls spread)
+    - σ=2.0 is typical (moderate variability)
+    - Higher σ = more extreme small/large losses
+- **GPD Tail** (Generalized Pareto Distribution):
+  - **Threshold Quantile**: Where tail begins (e.g., 0.95 = top 5% of losses)
+  - **Scale (β)**: Controls tail severity (higher = more extreme)
+  - **Shape (ξ)**: Controls tail weight (0.2–0.4 typical, ≥1.0 unstable)
+
+#### **Mode 2: Records-Based Model**
+Models losses as: `Number of Records × Cost per Record`
+- **Records μ**: Mean of log(records)
+  - μ=10 → median ≈ 22,000 records
+  - μ=12 → median ≈ 163,000 records
+- **Records σ**: Variability in record counts
+- Useful for breach scenarios with clear record exposure
+
+### 🛡️ Control Selection
+Four example controls (customize for your needs):
+- **Server Hardening**: Reduces hacking/web app incidents
+- **Media Encryption**: Reduces physical/lost-asset incidents
+- **Error Reduction**: Reduces human error incidents
+- **External Monitoring**: Reduces hacking/misuse incidents
+
+Each control applies **multipliers** to λ, P(any loss), and tail severity based on your VERIS action/pattern mix.
+
+### 💵 Control Costs
+Annual operational cost per control (in $K):
+- Enter realistic yearly costs (licenses, staffing, maintenance)
+- Used to calculate ROSI and net benefit
+
+---
+
+## 📈 Outputs & Visualizations
+
+### Main Results Dashboard
+- **Metric Cards**: Compare baseline vs. controlled scenarios
+  - Shows absolute values and deltas (improvements)
+- **ROSI Calculation**: Shows return on security investment
+  - \>100% = controls generate net benefit
+  - <0% = controls cost more than risk reduction
+
+### 🔬 Control Isolation Analysis
+Tests each control **individually** (all others off):
+- **ΔEAL**: Risk reduction from this control alone
+- **Benefit per $**: How much risk reduction per dollar spent
+- **ROSI %**: Return on investment for this control
+- Use to identify most cost-effective controls
+
+### 🧩 Marginal ROI
+Shows value of adding **one more control** to your current bundle:
+- Helps prioritize next investment
+- Accounts for diminishing returns as you add controls
+
+### 📊 Visualizations
+- **Loss Exceedance Curve (LEC)**: P(Loss ≥ x) on log-log scale
+  - Shows tail risk and extreme event probabilities
+  - Compare baseline vs. controlled curves
+- **Loss Histograms**: Distribution of annual losses (log scale)
+  - See shape of loss distribution
+  - Identify skewness and tail behavior
+
+### 🔗 CIS Recommendations
+If you upload `veris_to_cis_lookup.csv`:
+- See which **CIS Controls v8** map to your VERIS profile
+- Get ranked recommendations based on your action/pattern mix
+- Links controls to industry-standard framework
+
+---
+
+## 🔬 Advanced Features
+
+### Bayesian Frequency Update
+If you have **observed incident data**:
+1. Enable "Bayesian Frequency Update"
+2. Enter observation period (years) and incident count
+3. App updates λ using Bayesian posterior (Gamma-Poisson conjugate prior)
+4. Blends your prior belief with actual data
+
+### Confidence Intervals
+- Bootstrap resampling provides **95% CIs** for VaR and EAL
+- Shows statistical uncertainty in estimates
+- More bootstrap reps = smoother CIs (but slower)
+
+### Portfolio Batch Analysis
+Upload CSV with multiple accounts/business units:
+- Required columns: `account_id`, `net_worth`, `lam`, `p_any`
+- Runs parallel simulations with per-account parameters
+- Exports aggregated results for portfolio risk view
+
+---
+
+## 🎯 Typical Workflow
+
+1. **Set baseline parameters** (frequency, severity) based on:
+   - Historical incident data
+   - Industry benchmarks (VCDB, IRIS20, etc.)
+   - Expert judgment
+   
+2. **Review baseline metrics**:
+   - Is EAL reasonable for your organization?
+   - Do tail risks (VaR99, P(Ruin)) align with expectations?
+   
+3. **Load VERIS action/pattern shares** (optional):
+   - Upload JSON with your threat profile
+   - Or use defaults (VCDB-informed)
+   
+4. **Select controls** and set costs:
+   - Check controls you're evaluating
+   - Enter realistic annual costs
+   
+5. **Compare scenarios**:
+   - Review metric deltas and ROSI
+   - Check isolation analysis for best individual controls
+   - Review marginal ROI for next investment
+   
+6. **Validate results**:
+   - Use sanity check guide (at bottom)
+   - Export LEC points and review tail behavior
+   - Adjust parameters if needed
+   
+7. **Export configuration**:
+   - Save JSON for reproducibility
+   - Share with stakeholders
+   - Use for periodic updates
+
+---
+
+## 💡 Tips for Best Results
+
+### Parameter Selection
+- **Start conservative**: Use moderate λ and σ values, increase gradually
+- **Validate with data**: If you have claims data, calibrate to match
+- **Test sensitivity**: Vary parameters ±20% to see impact on metrics
+- **Watch warnings**: App flags extreme/unstable parameter combinations
+
+### Interpreting ROSI
+- **Positive ROSI**: Control generates net benefit (good!)
+- **High ROSI (>200%)**: Control is highly cost-effective
+- **Negative ROSI**: Control costs exceed risk reduction (may still be worth it for compliance/reputation)
+- **Compare marginal vs. isolated**: Marginal ROI shows diminishing returns
+
+### Common Pitfalls
+- **Over-fitting**: Don't tune parameters to match single data point
+- **Ignoring tail**: VaR95 can be deceptive; check VaR99 and CVaR95 too
+- **Zero costs**: Set realistic costs to get meaningful ROSI
+- **Extreme severity**: σ>3 or ξ>0.5 can produce unstable results
+
+### Using CIS Recommendations
+- Upload `veris_to_cis_lookup.csv` (example structure below)
+- Maps your VERIS actions/patterns to CIS Controls v8
+- Use as starting point for control selection
+- Customize based on your environment
+
+**Example CSV structure:**
+```
+action,cis_id,cis_title
+hacking,13,Network Monitoring and Defense
+malware,10,Malware Defenses
+physical,14,Security Awareness Training
+```
+
+---
+
+## 📚 Additional Resources
+
+### Understanding the Math
+- **Compound distribution**: [Wikipedia: Compound Probability Distribution](https://en.wikipedia.org/wiki/Compound_probability_distribution)
+- **GPD for tail modeling**: Klugman, Panjer & Willmot, *Loss Models*
+- **VERIS Framework**: [VERIS Community Database](http://veriscommunity.net/)
+
+### Cyber Risk Quantification
+- FAIR Institute: [Factor Analysis of Information Risk](https://www.fairinstitute.org/)
+- NIST Cybersecurity Framework
+- ISO 31000 Risk Management
+
+### Need Help?
+- Check parameter warnings (yellow/red alerts)
+- Review sanity check guide (bottom of page)
+- Start with defaults, adjust incrementally
+- Export config JSON to share with team
+
+---
+
+## ⚠️ Limitations & Disclaimers
+
+This is a **demonstration tool** for educational purposes:
+- Results depend heavily on input parameters
+- Models are simplifications of complex cyber risk
+- Not a substitute for professional risk assessment
+- Validate outputs against your organization's data
+- Use for prioritization and relative comparisons, not absolute predictions
+
+**Always**: Combine quantitative models with qualitative judgment, threat intelligence, and compliance requirements.
     """)
 
 # ===========================
