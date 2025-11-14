@@ -95,20 +95,19 @@ class FreqParams:
 
 
 def sample_frequency(n_years: int, fp: FreqParams, seed: Optional[int] = None) -> np.ndarray:
-    """Sample annual incident counts under a hurdle model."""
     rng = np.random.default_rng(seed)
-    any_breach = rng.binomial(1, fp.p_any, n_years)
-
+    # draw raw incident counts
     if fp.negbin:
-        # NegBin with mean=lam and dispersion r  -> success prob p = r / (r + lam)
         p = fp.r / (fp.r + fp.lam) if (fp.r + fp.lam) > 0 else 1.0
         counts = stats.nbinom.rvs(fp.r, p, size=n_years, random_state=rng)
     else:
-        counts = rng.poisson(fp.lam, n_years)
-
-    # Hurdle: force zero where any_breach=0, else at least one event
-    return np.where(any_breach == 0, 0, np.maximum(counts, 1))
-
+        counts = rng.poisson(fp.lam, size=n_years)
+    # per-incident “paid loss” thinning
+    if 0.0 <= fp.p_any < 1.0:
+        paid = rng.binomial(counts, fp.p_any)
+    else:
+        paid = counts
+    return paid
 
 def posterior_lambda(
     alpha0: float,
@@ -216,27 +215,21 @@ def simulate_annual_losses(
 # ---------------------------------------------------------------------
 
 def compute_metrics(losses: np.ndarray, net_worth: float) -> Dict[str, float]:
-    """Compute EAL and VaR metrics plus VaR-to-Net-Worth ratios."""
-    losses = np.asarray(losses, dtype=float)
-    eal = float(np.mean(losses))
-    v95 = float(np.quantile(losses, 0.95))
-    v99 = float(np.quantile(losses, 0.99))
-    return dict(
-        EAL=eal,
-        VaR95=v95,
-        VaR99=v99,
-        VaR95_to_NetWorth=(v95 / net_worth) if net_worth > 0 else np.nan,
-        VaR99_to_NetWorth=(v99 / net_worth) if net_worth > 0 else np.nan,
-    )
+    x = np.asarray(losses, float)
+    eal  = float(np.mean(x)) if x.size else 0.0
+    v95  = float(np.percentile(x, 95)) if x.size else 0.0
+    v99  = float(np.percentile(x, 99)) if x.size else 0.0
+    cvar = float(x[x >= v95].mean())   if x.size else 0.0
+    mx   = float(np.max(x))            if x.size else 0.0
+    pr   = float(np.mean(x >= net_worth)) if (x.size and net_worth > 0) else 0.0
+    return dict(EAL=eal, VaR95=v95, VaR99=v99, CVaR95=cvar, Max=mx, P(Ruin)=pr)
 
 
 def lec(losses: np.ndarray, n: int = 200) -> pd.DataFrame:
-    """Loss Exceedance Curve: for a grid of x, compute P(Loss >= x)."""
-    losses = np.asarray(losses, dtype=float)
-    grid = np.quantile(losses, np.linspace(0.01, 0.999, n))
-    exceed = (losses[:, None] >= grid[None, :]).mean(axis=0)
-    return pd.DataFrame({"loss": grid, "exceed_prob": exceed})
-
+    x = np.asarray(losses, float)
+    grid = np.quantile(x, np.linspace(0.01, 0.999, n))
+    ex = (x[:, None] >= grid[None, :]).mean(axis=0)
+    return pd.DataFrame({"Loss": grid, "Exceedance_Prob": ex})
 
 def lec_bands(samples: np.ndarray, n: int = 200, level: float = 0.90) -> pd.DataFrame:
     """
