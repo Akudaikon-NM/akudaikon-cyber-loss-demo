@@ -1428,7 +1428,6 @@ with st.expander("📁 Portfolio batch (CSV)", expanded=False):
             mime="text/csv"
         )
 
-
 # ============================
 # SANITY CHECK GUIDE (expander)
 # ============================
