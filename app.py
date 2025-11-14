@@ -1327,58 +1327,7 @@ if show_net_lec:
 # ============================
 # PORTFOLIO BATCH ANALYSIS
 # ============================
-with st.expander("📁 Portfolio batch (CSV)", expanded=False):
-    st.markdown("Upload a CSV with columns: `account_id`, `net_worth`, `lam`, `p_any`, etc.")
-    up  = st.file_uploader("Accounts CSV", type=["csv"], key="portfolio_accounts_csv")
-    rho = st.slider(
-        "Correlation (common shock on frequency)",
-        0.0, 0.9, 0.0, 0.1,
-        key="rho_common_shock",
-        help="0 = independent; higher = more shared shock across accounts"
-    )
 
-    if up:
-        df = pd.read_csv(up)
-        st.write(f"Loaded {len(df)} accounts")
-
-        if st.button("Run Portfolio Analysis", key="run_portfolio_btn"):
-            ...
-
-            results = []
-            progress_bar = st.progress(0)
-            for idx, row in df.iterrows():
-                # Extract / coerce per-row inputs with sensible defaults
-                account_id = row.get('account_id', f'Account_{idx}')
-                account_net_worth = pd.to_numeric(row.get('net_worth', 100e6), errors='coerce')
-                account_lam = pd.to_numeric(row.get('lam', 2.0), errors='coerce')
-                account_p_any = pd.to_numeric(row.get('p_any', 0.7), errors='coerce')
-                # Clean/fill NaNs and clamp p_any
-                account_net_worth = float(account_net_worth if np.isfinite(account_net_worth) else 100e6)
-                account_lam = float(account_lam if np.isfinite(account_lam) else 2.0)
-                account_p_any = float(np.clip(account_p_any if np.isfinite(account_p_any) else 0.7, 0.0, 1.0))
-                # Per-account config & frequency; reuse sidebar severity
-                cfg_account = ModelConfig(trials=cfg.trials, net_worth=account_net_worth,
-                                          seed=_stable_seed_from(account_id, base=cfg.seed),
-                                          record_cap=cfg.record_cap, cost_per_record=cfg.cost_per_record)
-                fp_account = FreqParams(lam=account_lam, p_any=account_p_any,
-                                        negbin=fp.negbin, r=fp.r)
-                losses_account = cached_simulate(_to_dict(cfg_account), _to_dict(fp_account), _to_dict(sp))
-                metrics_account = compute_metrics(losses_account, account_net_worth)
-                results.append({
-                    'account_id': account_id,
-                    'EAL': metrics_account['EAL'],
-                    'VaR95': metrics_account['VaR95'],
-                    'VaR99': metrics_account['VaR99'],
-                    'P(Ruin)': metrics_account['P(Ruin)']
-                })
-                progress_bar.progress((idx + 1) / len(df))
-            # Show results and offer download
-            results_df = pd.DataFrame(results)
-            st.success("✓ Portfolio analysis complete!")
-            st.dataframe(results_df, use_container_width=True)
-            csv = results_df.to_csv(index=False).encode("utf-8")
-            st.download_button(label="📥 Download Results CSV", data=csv,
-                               file_name="portfolio_results.csv", mime="text/csv")
 with st.expander("📁 Portfolio batch (CSV)", expanded=False):
     st.markdown("Upload a CSV with columns: `account_id`, `net_worth`, `lam`, `p_any`, etc.")
     up = st.file_uploader("Accounts CSV", type=["csv"])
